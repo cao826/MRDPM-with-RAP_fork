@@ -57,7 +57,7 @@ Every run creates `experiments/{phase|debug}_{name}_{YYMMDD_HHMMSS}/` containing
 1. **Initial predictor** (`models/region_net.py:Unetgenerator_256`, created through `networks_unet256.define_G`): a pix2pix-style U-Net whose encoder interleaves DRConv region-aware dynamic convolutions (`models/DRconv1.py`). It maps cond → a coarse Tmax `y_initial` and also returns three decoder feature maps `hs = [u7, u6, u5]` (64/128/256 channels at H/2, H/4, H/8).
 2. **Diffusion U-Net** (`models/guided_diffusion_modules/unet.py:UNet`): learns the **residual** `(y_0 − y_initial) * mask`. Its input is `cat(cond, y_noisy)`, so `unet.in_channel = cond_channels + 1` (currently 5).
 3. **Regional Asymmetry Prior**: before input blocks 5, 8 and 11, `cond_resample` fuses the matching `hs` feature with its mirror image (`torch.flip(cond, [2])`) and adds the result to the U-Net activations. The flip is along **dim 2 (H, the rows)**, so it is only a hemispheric mirror if the left/right axis of the brain runs along the array rows. Check the orientation of any new data against this.
-4. The `hs` features are `.detach()`ed, so the initial predictor is trained only by its own term: `loss = MSE(mask*noise, mask*noise_hat) + 0.1 * L1(y_0, y_initial)`.
+4. `loss = MSE(mask*noise, mask*noise_hat) + 0.1 * L1(y_0, y_initial)` (paper Eq. 4). The initial predictor shares the optimizer and gets gradients from both terms: directly from the L1 term, and from the diffusion term through `y_initial` → the residual → the noisy U-Net input. Only the `hs` feature path is `.detach()`ed (the "gradient stop" in the paper's Fig. 2).
 5. Inference (`restoration`) runs the full 1000-step ancestral sampler inside the mask and returns `y_t + y_initial`.
 
 **Hardcoded shape coupling**, which matters for any change of channel count or size:
@@ -66,7 +66,9 @@ Every run creates `experiments/{phase|debug}_{name}_{YYMMDD_HHMMSS}/` containing
 - **The `cond_resample(64,128) / (128,256,64) / (256,512,192)` widths** and the block indices 5, 8 and 11 assume `inner_channel=64`, `channel_mults=[1,2,4,8]`, `res_blocks=2` and an initial predictor with `ngf=32`. Changing any of these breaks the fusion.
 - **Spatial size**: the initial predictor downsamples 8 times by stride 2, so H and W must be multiples of 256.
 
-**Pretrained initial predictor**: `BaseNetwork.init_weights` loads `./tmax_net_G.pth` (strict) whenever that file exists in the cwd, and only in the train phase. No pretraining script is included. The upstream README says it is simply trained for 50 epochs with Adam, with the learning rate decayed linearly to zero.
+**Pretrained initial predictor**: the paper (§2.1, Eq. 1) pre-trains the initial predictor on its own with an L1 loss before diffusion training, and then fine-tunes it jointly. In the code, `BaseNetwork.init_weights` loads `./tmax_net_G.pth` (strict) whenever that file exists in the cwd, and only in the train phase. If the file is missing, the predictor silently starts from random weights. No weights or pretraining script are included. The upstream README says it is simply trained for 50 epochs with Adam, with the learning rate decayed linearly to zero (the paper does not give these settings).
+
+The paper is `1246_paper.pdf` at the repo root (untracked). It describes the asymmetry prior as a *horizontal* flip, but the code flips dim 2 (rows). The flip has to match whichever axis separates the hemispheres in our data.
 
 ### Training wrapper (`models/model.py:Palette`, `core/base_model.py:BaseModel`)
 
