@@ -18,6 +18,9 @@ def define_network(logger, opt, network_opt):
     if opt['phase'] == 'train':
         logger.info('Network [{}] weights initialize using [{:s}] method.'.format(net.__class__.__name__, network_opt['args'].get('init_type', 'default')))
         net.init_weights()
+        provenance = getattr(getattr(net, 'initial_net', None), 'provenance', None)
+        if provenance is not None:
+            logger.info('Initial predictor loaded from {}'.format(provenance))
     return net
 
 

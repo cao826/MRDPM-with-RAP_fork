@@ -10,7 +10,7 @@ from torchviz import make_dot
 from .networks_unet256 import define_G
 import pydot_ng
 class Network(BaseNetwork):
-    def __init__(self, unet, beta_schedule, module_name='sr3', **kwargs):
+    def __init__(self, unet, beta_schedule, module_name='sr3', initial_predictor=None, mask_unet_cond=False, **kwargs):
         super(Network, self).__init__(**kwargs)
 
         from .guided_diffusion_modules.unet import UNet
@@ -18,11 +18,29 @@ class Network(BaseNetwork):
         
         # 显示模型结构
         self.denoise_fn = UNet(**unet)
-        self.initial_net = define_G(4,1,32,use_dropout=True,gpu_ids=[0])
+        if initial_predictor is None:
+            self.initial_net = define_G(4,1,32,use_dropout=True,gpu_ids=[0])
+        elif initial_predictor['type'] == 'gan_bpm':
+            # ctp_only_plan.md §8: gan_bpm's generator, loaded from its checkpoint
+            from .gan_bpm_predictor import GanBpmInitialPredictor
+            self.initial_net = GanBpmInitialPredictor(**{k: v for k, v in initial_predictor.items() if k != 'type'})
+        else:
+            raise NotImplementedError('initial_predictor type [{}] is not implemented'.format(initial_predictor['type']))
+        # ctp_only_plan.md §7.1: the predictor reads the whole condition, the U-Net only its masked copy
+        self.mask_unet_cond = mask_unet_cond
         self.beta_schedule = beta_schedule
         self.module_name = module_name
         # ...
   
+    def init_weights(self):
+        super(Network, self).init_weights()
+        # BaseNetwork.init_weights re-initializes every conv, a pretrained predictor's too (§8.4)
+        if hasattr(self.initial_net, 'load_pretrained'):
+            self.initial_net.load_pretrained()
+
+    def unet_cond(self, y_cond, mask):
+        return y_cond * mask if self.mask_unet_cond else y_cond
+
     def set_loss(self, loss_fn):
         self.loss_fn = loss_fn
         self.loss_initial = torch.nn.L1Loss()
@@ -96,6 +114,7 @@ class Network(BaseNetwork):
         b, *_ = y_cond.shape
         y_initial,init_cond = self.initial_net(y_cond)
         y_initial = y_initial*mask
+        unet_cond = self.unet_cond(y_cond, mask)
         assert self.num_timesteps > sample_num, 'num_timesteps must greater than sample_num'
         sample_inter = (self.num_timesteps//sample_num)
         if target is not None:
@@ -105,7 +124,7 @@ class Network(BaseNetwork):
         ret_arr = y_t
         for i in tqdm(reversed(range(0, self.num_timesteps)), desc='sampling loop time step', total=self.num_timesteps):
             t = torch.full((b,), i, device=y_cond.device, dtype=torch.long)
-            y_t = self.p_sample(y_t, t, y_cond=y_cond,init_cond=init_cond)
+            y_t = self.p_sample(y_t, t, y_cond=unet_cond,init_cond=init_cond)
             if mask is not None:
                 y_t = y_0*(1.-mask) + mask*y_t
             if i % sample_inter == 0:
@@ -169,7 +188,7 @@ class Network(BaseNetwork):
                 ret_arr = torch.cat([ret_arr, y_t], dim=0)
         return y_t, ret_arr
     
-    def forward(self, y_0, y_cond=None, mask=None, noise=None):
+    def forward(self, y_0, y_cond=None, mask=None, noise=None, loss_mask=None):
         # sampling from p(gammas)
         b, *_ = y_0.shape
         t = torch.randint(1, self.num_timesteps, (b,), device=y_0.device).long() # 1-99
@@ -186,8 +205,12 @@ class Network(BaseNetwork):
         y_noisy = self.q_sample(
             y_0=y_res, sample_gammas=sample_gammas.view(-1, 1, 1, 1), noise=noise)
         if mask is not None:
-            noise_hat = self.denoise_fn(torch.cat([y_cond, y_noisy*mask+(1.-mask)*y_0], dim=1), sample_gammas, init_cond)
-            loss = self.loss_fn(mask*noise, mask*noise_hat) + self.loss_initial(y_0, y_initial)*0.1
+            noise_hat = self.denoise_fn(torch.cat([self.unet_cond(y_cond, mask), y_noisy*mask+(1.-mask)*y_0], dim=1), sample_gammas, init_cond)
+            if loss_mask is None:
+                loss = self.loss_fn(mask*noise, mask*noise_hat) + self.loss_initial(y_0, y_initial)*0.1
+            else:
+                # ctp_only_plan.md §7.2: no-data voxels keep their noise and U-Net input but leave the loss
+                loss = self.loss_fn(loss_mask*noise, loss_mask*noise_hat) + self.loss_initial(loss_mask*y_0, loss_mask*y_initial)*0.1
         else:
             noise_hat = self.denoise_fn(torch.cat([y_cond, y_noisy], dim=1), sample_gammas, init_cond)
             loss = self.loss_fn(noise, noise_hat) + self.loss_initial(y_0, y_initial)*0.1

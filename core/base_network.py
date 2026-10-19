@@ -39,7 +39,9 @@ class BaseNetwork(nn.Module):
     for m in self.children():
       if hasattr(m, 'init_weights'):
         m.init_weights(self.init_type, self.gain)
-    if os.path.exists("./tmax_net_G.pth"):
+    # BRAN's pretrained weights. A predictor with its own checkpoint (models/gan_bpm_predictor.py)
+    # reloads that in Network.init_weights instead.
+    if os.path.exists("./tmax_net_G.pth") and not hasattr(self.initial_net, 'load_pretrained'):
       self.initial_net.load_state_dict(torch.load("./tmax_net_G.pth"), strict=True)
 
 

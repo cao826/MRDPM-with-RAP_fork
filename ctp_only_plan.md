@@ -1,7 +1,8 @@
 # ctp-only plan: MRDPM on f13 CTP phases, with gan_bpm's generator as the initial predictor
 
-**Status (2026-10-19): proposal. Steps 0 and 1 (§13) are done, and the input path (§7.1) and
-the loss mask (§7.2) are decided; nothing else is built.** Branch `ctp-only`. This doc collects what
+**Status (2026-10-19): steps 0 and 1 (§13) are done, the input path (§7.1) and the loss mask
+(§7.2) are decided, and step 2 is built and passes its synthetic checks. Next: the checks on the
+real data (§12), then the GPU smoke run.** Branch `ctp-only`. This doc collects what
 was read and decided in conversation so far. Items marked **(verified)** were checked against
 code or data; items marked **(proposal)** wait for Carlos's agreement.
 
@@ -294,7 +295,7 @@ giving 64 / 128 / 256.
 Why the adapters can't be learned layers *before* the U-Net: the U-Net detaches `cond[i]`. A
 layer inside the predictor that only feeds those features would never get a gradient.
 
-### 8.2 The wrapper (proposal): `models/gan_bpm_predictor.py`
+### 8.2 The wrapper (built): `models/gan_bpm_predictor.py`
 
 ```python
 class GanBpmInitialPredictor(nn.Module):
@@ -327,7 +328,7 @@ class GanBpmInitialPredictor(nn.Module):
 The forward repeats `GeneratorUNet.forward`'s exact sequence so that it can return the
 intermediate tensors. A check enforces that `y` is bitwise equal to `Generator.forward` (§12).
 
-### 8.3 Loading and guards (proposal)
+### 8.3 Loading and guards (built)
 
 - **Import by file path.** Load gan_bpm's `models/generator.py` with
   `importlib.util.spec_from_file_location("gan_bpm_generator", ...)`. MRDPM has its own
@@ -377,7 +378,7 @@ intermediate tensors. A check enforces that `y` is bitwise equal to `Generator.f
 
 ---
 
-## 9. Splits, monitoring and test (proposal)
+## 9. Splits, monitoring and test (built)
 
 **Naming:** MRDPM "test" = gan_bpm fold 0's **held-out fold** (`val_case_ids`). MRDPM
 "monitor" = a small validation subset carved from the **training** cases.
@@ -402,129 +403,136 @@ intermediate tensors. A check enforces that `y` is bitwise equal to `Generator.f
 
 ---
 
-## 10. Code changes, file by file (proposal)
+## 10. Code changes, file by file (built 2026-10-19)
 
-| file | change | default behaviour |
+| file | change | without the new keys |
 |---|---|---|
 | `data/dataset.py` | new class `MCTPDataset_mask` (§10.1). `NumpyDataset_mask` untouched | n/a, new class |
-| `data/__init__.py` | optional `which_val_dataset` (§9) | unchanged without it |
-| `models/gan_bpm_predictor.py` | new: the wrapper (§8.2–8.3) | n/a |
-| `models/network.py` | `Network(initial_predictor=...)` picks BRAN (default) or the wrapper; `init_weights` reloads the pretrained predictor (§8.4); `forward` takes `loss_mask` (§7.2); `forward` and `restoration` mask the condition at the U-Net input (§7.1) | BRAN, today's loss; the extra mask is a no-op when the dataset already masked the condition with a binary mask |
-| `models/model.py` | `set_input` reads `loss_mask` (falls back to `mask`) and passes it to `netG(...)` | unchanged |
-| `core/base_network.py` | skip the `tmax_net_G.pth` load unless the predictor is BRAN | unchanged for BRAN |
+| `data/__init__.py` | optional `which_val_dataset` (§9). It refuses a validation set that shares a patient with the training set. In debug mode it cuts both, to `debug_split` and `debug_val_split` | unchanged |
+| `models/gan_bpm_predictor.py` | new: the wrapper (§8.2–8.3), plus an optional `expect_fold` guard | n/a |
+| `models/network.py` | `initial_predictor` picks BRAN (absent) or the wrapper. `init_weights` reloads a pretrained predictor (§8.4). `mask_unet_cond` masks the condition at the U-Net input, in `forward` and `restoration` (§7.1). `forward` takes `loss_mask` (§7.2) | BRAN, with today's U-Net input and loss, bit for bit (checked against `main`'s `forward`) |
+| `models/model.py` | `set_input` reads `loss_mask` (`None` when absent); `train_step` passes it on | unchanged |
+| `models/__init__.py` | the train log records the predictor's checkpoint, sha256 and epoch | unchanged for BRAN |
+| `core/base_network.py` | skips `./tmax_net_G.pth` when the predictor loads its own checkpoint | unchanged for BRAN |
+| `core/logger.py` | `LogTracker.reset` no longer writes through `.values` (below) | same values |
 | `config/ctp_only_f13_tmax_fold0.json` | new config (§11) | n/a |
 
 **Untouched:** the diffusion maths, `unet.py`, the asymmetry module, the training loop, EMA,
 checkpointing and `run.py`.
 
+**An upstream bug, fixed in `core/logger.py`.** Under pandas ≥ 3, `self._data[col].values` is a
+read-only view, so `LogTracker.reset` raised and `Palette` could not be built. The box image
+has pandas 3.0.5 (probe, §13 step 0), so this would have stopped the first GPU job. The CPU run
+of `run.py` in `scripts/ctp_only_checks.py` found it.
+
 ### 10.1 `MCTPDataset_mask`
 
-It reads the f13 root through gan_bpm's `mctp` package. `mctp` only imports numpy, pandas,
-scipy and torch, never `models`, so it is safe to append gan_bpm's root to `sys.path`
-(appended, so MRDPM's `models` still wins).
+It builds gan_bpm's own `MCTPDataset` with `build_transforms`, the same `PairedNormalize` that
+gan_bpm trained and validated with, and converts each item to MRDPM's dict. So the input
+window, the envelope and its cache, and the no-data rule are gan_bpm's code, not copies of it.
+gan_bpm's root is appended to `sys.path`, after MRDPM's, so MRDPM's `models` still wins.
+`mctp` never imports `models`.
 
-- **`__init__` arguments:**
-  - `mctp_root`, `label_type="tmax"`, `split_json`
-  - `part` ∈ {`train`, `monitor`, `test`}, plus the monitor-carve settings
-  - `tmax_ceiling=12.0`
-  - `mask_cache_root` (reuse gan_bpm's `MaskCache`; the envelope costs about 134 ms per slice
-    without it)
-- **`__getitem__`:**
-  1. Load the raw input `(3, 512, 512)` HU and the raw label `(512, 512)` s.
-  2. `envelope = brain_mask_from_input(raw)` (cached).
-  3. `cond = clip((raw − 10)/315, 0, 1)`, **not** masked (§7.1: `Network` masks the U-Net's
-     copy)
-  4. `gt = clip(label, 0, 12)/12 × envelope`
-  5. `loss_mask = envelope ∧ (label > −0.5)`
-  6. Return MRDPM's dict (§4) plus `loss_mask`. `path = f"{case_id}_slice{idx:03d}.npy"`.
-
----
-
-## 11. Config sketch (proposal)
-
-Only what differs from `config/npy_1000linear_-6_-2_b4_nc64.json`:
-
-```jsonc
-{
-    "name": "ctp_only_f13_tmax_fold0",
-    "datasets": {
-        "train": {
-            "which_dataset": {
-                "name": ["data.dataset", "MCTPDataset_mask"],
-                "args": {
-                    "mctp_root": "/raid/colivares/mctp_dataset_f13_isles24_ucla_v2",
-                    "label_type": "tmax",
-                    "split_json": "/radraid2/colivares/matrix/gan_bpm_tmax_f13uclav2_t12_adv0_k5/fold_0/split.json",
-                    "part": "train",
-                    "tmax_ceiling": 12.0
-                }
-            },
-            "which_val_dataset": { /* same, "part": "monitor" */ },
-            "dataloader": { "args": { "batch_size": 1 /* measure at 512 */ } }
-        },
-        "test": { "which_dataset": { /* same, "part": "test" */ } }
-    },
-    "model": {
-        "which_networks": [{
-            "name": ["models.network", "Network"],
-            "args": {
-                "initial_predictor": {
-                    "type": "gan_bpm",
-                    "gan_bpm_root": "/raid/colivares/github_repos/gan_bpm",
-                    "checkpoint": "/radraid2/colivares/matrix/gan_bpm_tmax_f13uclav2_t12_adv0_k5/fold_0/checkpoints/best.pt"
-                },
-                "unet": { "in_channel": 4, "image_size": 512 /* rest unchanged */ }
-            }
-        }]
-    }
-}
-```
-
-The learning rate (5e-5), the noise schedule (1000 linear steps, 1e-6 → 0.01), EMA and the
-hardcoded LR schedule (constant to epoch 100, then linear to 0 at 200) stay as the paper and
-code have them.
+- **Arguments:** `mctp_root`, `gan_bpm_root`, `split_json`, `part` ∈ {`train`, `monitor`,
+  `test`}, `label_type="tmax"`, `tmax_ceiling=12.0`, `monitor_cases_per_dataset=1`,
+  `monitor_max_slices=32`, `monitor_seed=0`, `mask_cache=True`. Also gan_bpm's row QC,
+  `min_label_fg_frac` and `qc_drop_slice_idx`, with gan_bpm's defaults.
+- **Refuses** a `split.json` whose train and val share a patient, or that lists a case the
+  index lacks.
+- **Monitor:** `monitor_cases_per_dataset` whole patients per dataset, drawn from
+  `train_case_ids` with a seeded permutation, then capped at `monitor_max_slices` evenly
+  spaced slices. Train is `train_case_ids` minus every monitor patient's cases.
+- **Item:**
+  - `cond_image = (gan_bpm input + 1)/2` = `clip((HU − 10)/315, 0, 1)`, **not** masked
+  - `gt_image = (gan_bpm label + 1)/2 × envelope` = `clip(Tmax, 0, 12)/12` inside the envelope
+  - `mask` = the envelope, `loss_mask` = `support`, `path = f"{case_id}_slice{idx:03d}.npy"`
+- **DataLoader workers must fork** (Linux's default). A spawned worker, as on macOS, cannot
+  import `mctp`.
 
 ---
 
-## 12. Checks (proposal)
+## 11. Config (built): `config/ctp_only_f13_tmax_fold0.json`
 
-Every check gets a negative control, following gan_bpm's practice.
+What differs from `config/npy_1000linear_-6_-2_b4_nc64.json`:
 
-**Data:**
+- **Datasets:** `MCTPDataset_mask` for train, monitor (`which_val_dataset`) and test, all on
+  the v2 root and fold 0's `split.json`. The monitor is 1 patient per dataset, at most 32
+  slices.
+- **Network:** `initial_predictor` = gan_bpm's fold-0 `best.pt` with `expect_fold: 0`;
+  `mask_unet_cond: true`; `unet.in_channel` 4 and `image_size` 512.
+- **Output:** `path.base_dir` = `/radraid2/colivares/mrdpm_ctp_only/experiments`, not the repo.
+- **Batch:** train 1 (to measure, §14). Monitor and test 4: sampling only, no gradients.
+- **`save_checkpoint_epoch` 10, not 1:** each save is 1.1 GB (§14).
+- **`debug` block:** `n_epoch` 0 (the loop runs while `epoch <= n_epoch`, so that is one
+  epoch), 2 training slices, 2 monitor slices, a checkpoint and a monitor pass at epoch 1.
 
-- The cases in each part equal `split.json`'s. No case or patient is in two parts.
-  - Negative control: a monitor case that is also in train is refused.
-- `2·cond − 1` equals gan_bpm's `PairedNormalize` image on real slices, over the whole frame
-  (within float32 tolerance).
-- `gt` equals `(gan_bpm normed_label + 1)/2` inside the envelope wherever the label is valid.
-- `loss_mask` equals gan_bpm's `support` channel exactly.
-- `path` ends in `.npy`.
+Unchanged from the paper and the code: lr 5e-5, the noise schedule (1000 linear steps,
+1e-6 → 0.01), EMA, the hardcoded LR schedule (constant to epoch 100, then linear to 0 at 200),
+200 epochs, a monitor pass every 10.
 
-**Predictor:**
+---
 
-- The wrapper's `y` is bitwise equal to `Generator.forward` on the same input.
-- Feature shapes are `[(64, 256, 256), (128, 128, 128), (256, 64, 64)]` at 512.
-- The predictor gets the unmasked condition and the U-Net the masked one, in `forward` and
-  in `restoration`.
-  - Negative control: masking the predictor's input too changes `y_initial`.
-- After `define_network`, the predictor's weights equal the checkpoint's.
-  - Negative control: without the reload in `init_weights`, they differ.
-- Refused checkpoints: 40 s ceiling, `n_phases != 3`, wrong target.
+## 12. Checks
 
-**Loss:**
+Two scripts. Where a check could pass without testing anything, a negative control follows it.
 
-- With `loss_mask`, changing `gt` at a hole voxel doesn't change the loss.
-  - Negative control: with `loss_mask = mask`, it does.
-- Without `loss_mask`, the loss is bit-identical to today's.
+**`scripts/ctp_only_checks.py`: synthetic data, CPU. 74/74 pass on the laptop (2026-10-19).**
+It builds a fake f13 root at 256 × 256 (three datasets, a skull, no-data holes, real zeros,
+labels above 12 s, one patient with two cases) and fake gan_bpm checkpoints.
 
-**Orientation:**
+- **Data:**
+  - parts against `split.json`, whole patients, the monitor cap;
+  - negative control: a split with a patient in train and val is refused;
+  - values against gan_bpm's pipeline, and against §5's formulas computed from the raw files:
+    `cond` exact, `gt` to 4e-8 (the 40 s scale fails);
+  - `loss_mask` = `support` and `mask` = envelope, exactly; `.npy` paths, unique.
+- **`which_val_dataset`:** each set from its own block, the debug cuts, the upstream slice
+  split unchanged without it. Negative control: shared patients are refused.
+- **Predictor:**
+  - strict weights and their sha256;
+  - `y` bitwise equal to `Generator.forward`;
+  - `hs` equal to G's own intermediate tensors, doubled;
+  - BRAN's shapes at 512;
+  - refuses a 40 s ceiling, 4 phases, rCBF, `sqrt` and the wrong fold.
+- **Initialization order:** the predictor's weights equal the checkpoint's after
+  `define_network` (negative control: BaseNetwork's init alone overwrites them). A stray
+  `tmax_net_G.pth` is skipped, and the log records the checkpoint.
+- **Network:**
+  - the predictor reads the whole condition and the U-Net the condition × mask, in `forward`
+    and in every `restoration` step;
+  - negative controls: the two differ on the batch; masking the predictor's input changes
+    `y_initial`; with the flag off the U-Net reads the whole condition.
+  - With `loss_mask`, `gt` in the holes doesn't change the loss (negative control: with
+    `mask` as the loss mask, it does). This uses a pointwise stand-in for the U-Net. The real
+    U-Net mixes neighbours, so the hole values do reach the loss through its input: §7.2's
+    second caveat.
+  - Without `loss_mask` and `mask_unet_cond`, the loss is bit-identical to `main`'s `forward`.
+  - Gradients reach the predictor and the U-Net.
+- **Config:** the parts, the shared arguments, the same monitor carve for train and monitor,
+  the checkpoint in the split's fold directory, `expect_fold`, `in_channel`, 512,
+  `mask_unet_cond`, `log_iter`.
+- **`run.py` end to end on the CPU** (5 noise steps, 256 × 256):
+  - `train -d` writes checkpoint 1 and a monitor pass (`GT_`/`Out_`/`Process_`/`Mask_` for
+    2 slices, finite, 0 outside the mask). The log names the checkpoint, and the predictor's
+    weights moved.
+  - `test -d` with `resume_state` writes `Out_` for 2 held-out slices and `ddim_test.txt`.
+  - The MRDPM checkpoint covers every weight (`strict=False` skips only the six noise-schedule
+    buffers), so the predictor tested is the fine-tuned one.
 
-- One PNG: a slice, its `flip(dim=2)`, and their overlay. Confirm by eye that the flip swaps
-  the hemispheres.
+**`scripts/ctp_only_box_checks.py`: the real data and checkpoint, CPU, on the box. Not run
+yet.** Tested on the laptop against a 512 fixture: everything passes except the two checks
+that cannot there (the sha256, and orientation on a perfectly round head).
 
-**Where they run:** the data and predictor checks on the Mac (`torch` env, CPU) where they
-don't need UCLA data. The rest runs on the box. `Network.set_new_noise_schedule` defaults to
-`cuda`, so the full-network checks need the box or a `device` argument.
+1. The real checkpoint loads, with §13's sha256, and was trained on this root.
+2. The parts against `split.json`; the monitor is 1 patient per dataset.
+3. The test part against gan_bpm's own validation loader, built from the checkpoint's
+   config: the same slices in the same order, the same values.
+4. Control: the predictor alone, through MRDPM's dataset and wrapper, reproduces
+   `val_L_pix_brain` = 0.2388 (1.433 s).
+5. Orientation (§6): the envelope's mirror dice across each axis, as stored and re-centred,
+   plus `orientation.png` (a slice, its `flip(dim=2)`, the overlay) to check by eye.
+6. The Network from the real config at 512: the predictor's weights after init, and one
+   forward.
 
 ---
 
@@ -545,7 +553,8 @@ don't need UCLA data. The rest runs on the box. `Network.set_new_noise_schedule`
        import-time only: `einops` is imported but unused in `region_net.py`, `torchviz` and
        `pydot_ng` are unused in `network.py`, and `cv2` comes in through `data/dataset.py`'s
        unused `.util.mask` import. Tensorboard is optional (the logger only warns).
-     - Open: how to add them (a new image tag, or a `pip --target` dir on `/raid`).
+     - Resolved: a new image tag, `registry.cvib.ucla.edu/colivares:mrdpm-env-v1`
+       (`Dockerfile`), pushed 2026-10-18.
 1. **The masked-input check (§7.1).** This decides the input path. Script:
    `scripts/masked_input_check.py`. Its native arm goes through gan_bpm's own
    `build_dataloaders` and must reproduce the checkpoint's stored `val_L_pix_brain` (control
@@ -553,11 +562,13 @@ don't need UCLA data. The rest runs on the box. `Network.set_new_noise_schedule`
    **Done 2026-10-19:** native 1.433 s, masked 1.732 s (+21 %); the native arm reproduces
    the stored 0.2388. Decision in §7.1.
 2. **Build** the dataset class, the wrapper, the `network.py` / `model.py` changes, the
-   validation hook and the config, with the checks in §12.
-3. **Smoke on the box:**
-   - `python run.py -p train -d` with the new config: a few iterations, one monitor pass on
-     2 slices;
-   - then `-p test` on 2 slices with `resume_state` set.
+   validation hook and the config, with the checks in §12. **Built 2026-10-19** (§10, §11).
+   The synthetic checks pass on the laptop; the real-data checks are next.
+3. **Smoke on the box's GPU** (a Condor job):
+   - `python run.py -p train -d` with the new config: one epoch on 2 slices, one monitor pass
+     on 2 slices;
+   - then `-p test -d` on 2 slices with `resume_state` set;
+   - measure seconds per sampling step and the memory at batch 1 (§14).
 4. **The first real run:** fold 0, Tmax.
 5. **Score against gan_bpm fold 0** on the held-out fold, in seconds, over `support`.
    - Proposal: write MRDPM's `Out_` maps as gan_bpm's external-maps `.npz`
@@ -569,8 +580,16 @@ don't need UCLA data. The rest runs on the box. `Network.set_new_noise_schedule`
 ## 14. Compute (to measure, not estimated here)
 
 - **512 vs 256.** The generator was trained at 512, so the diffusion U-Net runs at 512. That
-  is about 4× the paper's per-step cost. Attention at `ds = 16` becomes 32 × 32 tokens.
+  is about 4× the paper's per-step cost.
+  - **Attention (verified, correcting an earlier line here).** `attn_res: [16]` never
+    matches: with four levels the U-Net's `ds` only reaches 8. The only attention layer is the
+    middle block's, at H/8. That is 64 × 64 = 4,096 tokens at 512, against the paper's
+    1,024 at 256: 16× the attention memory.
   - The batch size has to be measured. The paper used 4 at 256 on a 40 GB A100.
+  - One forward of one 512 slice, without gradients, takes 15 s on the laptop's CPU.
+- **Size (verified).** The U-Net has 68.5 M parameters and the predictor 1.9 M. One save is
+  the Network (282 MB), its EMA copy (282 MB) and the optimizer state (564 MB): 1.1 GB. Saving
+  every 10 epochs, a 200-epoch run writes about 22 GB.
 - **Sampling.** Every monitor or test slice costs 1,000 U-Net evaluations (`restoration`).
   - DDIM (`restoration_ddim`) exists but isn't wired in, and it would crash: it calls
     `denoise_fn` without the asymmetry features.

@@ -64,6 +64,8 @@ class Palette(BaseModel):
         self.cond_image = self.set_device(data.get('cond_image')).type(torch.float32)
         self.gt_image = self.set_device(data.get('gt_image')).type(torch.float32)
         self.mask = self.set_device(data.get('mask'))
+        # None unless the dataset sends one; then the loss counts only it (ctp_only_plan.md §7.2)
+        self.loss_mask = self.set_device(data.get('loss_mask'))
         self.mask_image = data.get('mask_image')
         self.path = data['path']
         self.batch_size = len(data['path'])
@@ -111,7 +113,7 @@ class Palette(BaseModel):
         for train_data in tqdm.tqdm(self.phase_loader):
             self.set_input(train_data)
             self.optG.zero_grad()
-            loss = self.netG(self.gt_image, self.cond_image, mask=self.mask)
+            loss = self.netG(self.gt_image, self.cond_image, mask=self.mask, loss_mask=self.loss_mask)
             loss.backward()
             self.optG.step()
 

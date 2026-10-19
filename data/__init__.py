@@ -49,6 +49,22 @@ def define_dataset(logger, opt):
         else:
             data_len *= debug_split
 
+    ''' a separate validation set replaces the slice split below (ctp_only_plan.md §9) '''
+    val_dataset_opt = opt['datasets'][opt['phase']]['which_val_dataset']
+    if val_dataset_opt is not None:
+        val_dataset = init_obj(val_dataset_opt, logger, default_file_name='data.dataset', init_type='Dataset')
+        shared = set(getattr(phase_dataset, 'patient_ids', ())) & set(getattr(val_dataset, 'patient_ids', ()))
+        if shared:
+            raise ValueError('patients in both the {} and the validation set, e.g. {}'.format(opt['phase'], sorted(shared)[:5]))
+        if 'debug' in opt['name']:
+            val_len = opt['debug'].get('debug_val_split', debug_split)
+            val_len = val_len if isinstance(val_len, int) else len(val_dataset) * val_len
+            phase_dataset = Subset(phase_dataset, range(min(int(data_len), len(phase_dataset))))
+            val_dataset = Subset(val_dataset, range(min(int(val_len), len(val_dataset))))
+        logger.info('Dataset for {} have {} samples.'.format(opt['phase'], len(phase_dataset)))
+        logger.info('Dataset for {} have {} samples.'.format('val', len(val_dataset)))
+        return phase_dataset, val_dataset
+
     dataloder_opt = opt['datasets'][opt['phase']]['dataloader']
     valid_split = dataloder_opt.get('validation_split', 0)    
     

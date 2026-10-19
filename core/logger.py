@@ -159,8 +159,8 @@ class LogTracker:
         self.reset()
 
     def reset(self):
-        for col in self._data.columns:
-            self._data[col].values[:] = 0
+        # not `self._data[col].values[:] = 0`: pandas >= 3 (the box image has 3.0.5) makes that view read-only
+        self._data.loc[:, :] = 0
 
     def update(self, key, value, n=1):
         self._data.loc[key, 'total'] += value * n
