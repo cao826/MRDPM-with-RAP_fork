@@ -1,6 +1,7 @@
 # ctp-only plan: MRDPM on f13 CTP phases, with gan_bpm's generator as the initial predictor
 
-**Status (2026-10-18): proposal, nothing built.** Branch `ctp-only`. This doc collects what
+**Status (2026-10-18): proposal. Step 0 (box prerequisites, §13) is checked; nothing else is
+built.** Branch `ctp-only`. This doc collects what
 was read and decided in conversation so far. Items marked **(verified)** were checked against
 code or data; items marked **(proposal)** wait for Carlos's agreement.
 
@@ -479,13 +480,22 @@ don't need UCLA data. The rest runs on the box. `Network.set_new_noise_schedule`
 
 ## 13. Order of work (proposal)
 
-0. **Box prerequisites:**
-   - Confirm the fold-0 checkpoint's `ckpt["config"]`: `target`, `tmax_ceiling` 12,
-     `n_phases` 3, `lambda_adv` 0, `split_file`, `data_root` = the v2 root.
-   - Confirm `fold_0/split.json` exists.
-   - Install MRDPM's extra dependencies into the env that runs gan_bpm (torch 2.13 on the
-     box): `dropblock`, `einops`, `tensorboardX`, plus `torchviz` and `pydot_ng`, which
-     `models/network.py` imports at the top even though it doesn't use them.
+0. **Box prerequisites: checked 2026-10-18** (`condor/probe_box.sh`, run on the box with
+   `docker run` in `pytorch-env-v2`).
+   - Fold-0 checkpoint (verified): `target` tmax, `tmax_ceiling` 12, `n_phases` 3,
+     `label_transform` linear, `lambda_adv` 0, `fold` 0, `data_root` = the v2 root. Epoch 5,
+     sha256 `2428e88482ce0994229a086ac4bb4a56b7b37ada5494156ae3e2ea0eba3a4731`. The
+     generator's module names match §8.2.
+   - `fold_0/split.json` (verified): 353 train / 90 val cases (= 100 + 267 + 76), no
+     overlap. The data root already has a `mask_cache/`.
+   - Condor jobs run in `pytorch-env-v2` (torch 2.5.1, CUDA 12.4, Python 3.11), **not** the
+     box's conda env (torch 2.13). The image lacks `einops`, `dropblock`, `torchviz`,
+     `pydot_ng`, `cv2` and `tensorboardX`/`tensorboard`.
+     - Only `dropblock` is actually called (BRAN's `UNetUp` dropout). The rest are
+       import-time only: `einops` is imported but unused in `region_net.py`, `torchviz` and
+       `pydot_ng` are unused in `network.py`, and `cv2` comes in through `data/dataset.py`'s
+       unused `.util.mask` import. Tensorboard is optional (the logger only warns).
+     - Open: how to add them (a new image tag, or a `pip --target` dir on `/raid`).
 1. **The masked-input check (§7.1).** This decides the input path.
 2. **Build** the dataset class, the wrapper, the `network.py` / `model.py` changes, the
    validation hook and the config, with the checks in §12.
