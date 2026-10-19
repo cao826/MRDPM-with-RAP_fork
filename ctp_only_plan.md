@@ -652,6 +652,8 @@ a perfectly round head).
      The config's `seed: -1` (upstream's) makes `core/util.py:set_seed` turn on cuDNN
      benchmarking, which tries convolution algorithms with large workspaces on the first step.
      The probe ran without it. Later epochs' peaks are in `train.csv`.
+   - **Fold 0 submitted 2026-10-19.** Folds 1–4: `condor/ctp_only_folds_1_4.dag`, the same job
+     per fold, one at a time (`MAXJOBS h100 1`, no dependencies between folds, no retries).
 5. **Score against gan_bpm fold 0** on the held-out fold, in seconds, over `support`.
    - Proposal: write MRDPM's `Out_` maps as gan_bpm's external-maps `.npz`
      (`pred_norm = 2·out − 1`), so gan_bpm's evaluation code scores both models the same way.

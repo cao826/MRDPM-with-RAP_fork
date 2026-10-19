@@ -1,0 +1,46 @@
+# Folds 1-4 of the ctp-only Tmax model (ctp_only_plan.md §13 step 4), one at a time on one H100.
+# Each node is the fold-0 job, condor/ctp_only_train_h100.sub, with fold=k and mode=full: about
+# 20 h each, so about 3.5 days in all once they start. Results land in
+# /radraid2/colivares/mrdpm_ctp_only/runs/ctp_only_f13_tmax_fold<k>_<date_time>/.
+#
+#   cd /raid/colivares/github_repos/MRDPM-with-RAP_fork && git pull
+#   condor_q -run          # this account may hold 3 GPUs at once; going over gets jobs booted
+#   cd condor && mkdir -p log && condor_submit_dag ctp_only_folds_1_4.dag
+#   condor_q -dag
+#   tail -f ctp_only_folds_1_4.dag.dagman.out
+#
+# ONE AT A TIME, BUT INDEPENDENT
+# The nodes have no PARENT/CHILD lines, so a failed fold doesn't stop the ones after it.
+# MAXJOBS h100 1 makes DAGMan run one node at a time; it submits them in the order below.
+# MAXJOBS counts only this DAG's jobs: fold 0, submitted on its own, holds its own GPU until it
+# finishes, so the account holds 2 while both run.
+#
+# WORKSPACE DISK
+# Each job uses about 18 GB of the H100 box's local disk (41 GB free when probed, shared with
+# other jobs). While fold 0 runs, fold 1 may wait for room, or start and stop at once:
+# scripts/ctp_only_stage_data.py refuses to copy into too little space, before training.
+#
+# NO RETRY
+# A retried node would restart its fold from epoch 0. If a node fails, DAGMan finishes the
+# others and writes ctp_only_folds_1_4.dag.rescue001. Then either resume that fold by hand from
+# its last checkpoint on /radraid2 (ctp_only_train_h100.sub's header), or fix the cause and run
+# the same condor_submit_dag again: it picks up the rescue file and reruns only the folds that
+# did not finish, from epoch 0.
+
+JOB      FOLD1  ctp_only_train_h100.sub
+VARS     FOLD1  fold="1" mode="full"
+CATEGORY FOLD1  h100
+
+JOB      FOLD2  ctp_only_train_h100.sub
+VARS     FOLD2  fold="2" mode="full"
+CATEGORY FOLD2  h100
+
+JOB      FOLD3  ctp_only_train_h100.sub
+VARS     FOLD3  fold="3" mode="full"
+CATEGORY FOLD3  h100
+
+JOB      FOLD4  ctp_only_train_h100.sub
+VARS     FOLD4  fold="4" mode="full"
+CATEGORY FOLD4  h100
+
+MAXJOBS  h100  1
