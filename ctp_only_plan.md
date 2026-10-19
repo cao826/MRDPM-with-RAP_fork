@@ -496,7 +496,10 @@ don't need UCLA data. The rest runs on the box. `Network.set_new_noise_schedule`
        `pydot_ng` are unused in `network.py`, and `cv2` comes in through `data/dataset.py`'s
        unused `.util.mask` import. Tensorboard is optional (the logger only warns).
      - Open: how to add them (a new image tag, or a `pip --target` dir on `/raid`).
-1. **The masked-input check (§7.1).** This decides the input path.
+1. **The masked-input check (§7.1).** This decides the input path. Script:
+   `scripts/masked_input_check.py`. Its native arm goes through gan_bpm's own
+   `build_dataloaders` and must reproduce the checkpoint's stored `val_L_pix_brain` (control
+   tested on synthetic data: |diff| 3e-8; a re-initialized generator fails it).
 2. **Build** the dataset class, the wrapper, the `network.py` / `model.py` changes, the
    validation hook and the config, with the checks in §12.
 3. **Smoke on the box:**
