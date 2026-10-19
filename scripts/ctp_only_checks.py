@@ -633,8 +633,9 @@ def check_run_py(cfg, root, split, ckpts, state, gan_bpm, work):
         run.main_worker(0, 1, opt)
         test_dir = Path(opt["path"]["experiments_root"]) / "results/test/0"
         tested = sorted(p.name[len("Out_"):].split("_slice")[0] for p in test_dir.glob("Out_*.npy"))
-        check("test: Out_ maps for 2 slices of the held-out fold",
-              len(tested) == 2 and set(tested) <= set(json.loads(split.read_text())["val_case_ids"]), str(tested))
+        n_test = c["debug"]["debug_split"]          # the test phase's debug cut (it has no val set)
+        check(f"test: Out_ maps for {n_test} slices (debug_split), all from the held-out fold",
+              len(tested) == n_test and set(tested) <= set(json.loads(split.read_text())["val_case_ids"]), str(tested))
         check("test: ./ddim_test.txt records resume_state", str(ck / "1") in (work / "run/ddim_test.txt").read_text())
         # What Palette.load_networks does in the test phase: strict=False over a fresh Network.
         net = define_network(Log(), {"phase": "test"}, network_opt(c, gan_bpm, ckpts["good"]))

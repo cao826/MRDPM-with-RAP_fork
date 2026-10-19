@@ -35,9 +35,9 @@ requirements            = (Machine == "$(gpu_host:REDLRADADM35838).ad.medctr.ucl
 request_gpus            = 1
 request_cpus            = 8
 request_memory          = 32G
-# The fold's training cases (at most ~25 GB of the 31 GB root: scripts/ctp_only_stage_data.py
-# --dry-run prints the real size), two checkpoints (1.1 GB each), the monitor maps (~2.5 GB).
-request_disk            = 30G
+# The fold's training cases (13.3 GB for fold 0, by scripts/ctp_only_stage_data.py --dry-run),
+# two checkpoints (1.1 GB each), the monitor maps (~2.5 GB), the code: about 18 GB.
+request_disk            = 24G
 
 output                  = log/ctp_only_train_h100.$(cluster).$(process).out
 error                   = log/ctp_only_train_h100.$(cluster).$(process).err
