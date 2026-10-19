@@ -664,6 +664,9 @@ a perfectly round head).
      split needs, then writes `STAGED_OK`). The training job now reads from there, keeps its run
      folder in `/home/colivares/mrdpm_ctp_only/experiments/<cluster.process>/`, and asks for 2 GB
      of workspace.
+   - **Staged and checked 2026-10-19** (443 cases, 3,924 slices, 16.6 GB, no file missing, the 5
+     generators' sha256 equal). **Debug run from `/home` passed** the same day: results in
+     `/radraid2/colivares/mrdpm_ctp_only/runs/debug_ctp_only_f13_tmax_fold0_261019_210103/`.
 5. **Score against gan_bpm fold 0** on the held-out fold, in seconds, over `support`.
    - Proposal: write MRDPM's `Out_` maps as gan_bpm's external-maps `.npz`
      (`pred_norm = 2·out − 1`), so gan_bpm's evaluation code scores both models the same way.

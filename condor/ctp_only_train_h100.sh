@@ -124,7 +124,7 @@ say "train exited $status; results in ${RUN_OUT:-<none>} (run folder on the H100
 tr '\r' '\n' < "$W/train.out" | grep -v "it/s]\|s/it]\|^ *$" | tail -n 25
 if [ -n "$RUN_OUT" ]; then
     for f in health/train.csv health/monitor.csv; do
-        [ -f "$RUN_OUT/$f" ] && { say "--- $f (header and last rows)"; head -1 "$RUN_OUT/$f" | tee -a "$W/job_summary.txt"; tail -n 3 "$RUN_OUT/$f" | tee -a "$W/job_summary.txt"; }
+        [ -f "$RUN_OUT/$f" ] && { say "--- $f (header and last rows)"; head -1 "$RUN_OUT/$f" | tee -a "$W/job_summary.txt"; tail -n +2 "$RUN_OUT/$f" | tail -n 3 | tee -a "$W/job_summary.txt"; }
     done
     say "--- checkpoints: $(ls "$RUN_OUT/checkpoint" | tr '\n' ' ')"
 fi
