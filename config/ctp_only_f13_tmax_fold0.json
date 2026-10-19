@@ -127,7 +127,8 @@
                         "num_head_channels": 32,
                         "res_blocks": 2,
                         "dropout": 0.2,
-                        "image_size": 512
+                        "image_size": 512,
+                        "mirror_hs": false // our scans aren't aligned, so no asymmetry flip (ctp_only_decisions.md)
                     },
                     "beta_schedule": {
                         "train": {

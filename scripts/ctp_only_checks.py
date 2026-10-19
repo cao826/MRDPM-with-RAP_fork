@@ -2,8 +2,8 @@
 
 Builds a small fake f13 root (three datasets, a skull, no-data holes, one patient with two
 cases) and fake gan_bpm checkpoints in a temp dir. Then it checks the dataset, the
-`which_val_dataset` hook, the gan_bpm predictor, Network's conditioning and loss masks and
-the config, and runs run.py's train (debug) and test phases end to end on the CPU. Checks
+`which_val_dataset` hook, the gan_bpm predictor, Network's conditioning and loss masks, the
+U-Net's `mirror_hs` switch and the config, and runs run.py's train (debug) and test phases end to end on the CPU. Checks
 marked "negative control" show that the check above them can fail.
 
     python scripts/ctp_only_checks.py [--gan-bpm PATH] [--keep DIR]
@@ -417,6 +417,46 @@ def check_network(parts, ckpts, gan_bpm, cfg):
           bool(torch.isfinite(loss_value)) and grad(net.initial_net) > 0 and grad(net.denoise_fn) > 0)
 
 
+def check_mirror(parts, ckpts, gan_bpm, cfg):
+    print("\nthe asymmetry prior's flip: unet.mirror_hs (ctp_only_decisions.md)")
+    import models.loss
+    from models import define_network
+    off = network_opt(cfg, gan_bpm, ckpts["good"])
+    on = copy.deepcopy(off)
+    del on["args"]["unet"]["mirror_hs"]                 # upstream configs have no such key
+    check("the config turns the flip off", off["args"]["unet"].get("mirror_hs") is False)
+    nets = {}
+    for name, opt in (("on", on), ("off", off)):
+        nets[name] = define_network(Log(), {"phase": "train"}, opt).eval()
+        nets[name].set_loss(models.loss.mse_loss)
+        nets[name].set_new_noise_schedule(device=torch.device("cpu"), phase="train")
+    shapes = lambda n: {k: v.shape for k, v in n.state_dict().items()}
+    check("both settings have the same weights, so a checkpoint loads into either", shapes(nets["on"]) == shapes(nets["off"]))
+    nets["off"].load_state_dict(nets["on"].state_dict())
+
+    b = batch_of(parts["test"])
+    pairs, losses = {}, {}
+    for name, net in nets.items():
+        seen = []
+        u = net.denoise_fn
+        hooks = [m.flip_sample.register_forward_pre_hook(lambda m, a: seen.append(a[0].clone()))
+                 for m in (u.cond_resample1, u.cond_resample2, u.cond_resample3)]
+        with torch.no_grad():
+            torch.manual_seed(0)     # the same t and noise for both
+            losses[name] = net(b["gt_image"], b["cond_image"], mask=b["mask"], loss_mask=b["loss_mask"]).item()
+        for h in hooks:
+            h.remove()
+        pairs[name] = [(x[:, :x.shape[1] // 2], x[:, x.shape[1] // 2:]) for x in seen]
+    check("default (no key): each of the 3 modules pairs the features with their flip along dim 2",
+          len(pairs["on"]) == 3 and all(torch.equal(m, torch.flip(f, [2])) for f, m in pairs["on"]))
+    check("mirror_hs false: each of the 3 modules pairs the features with themselves",
+          len(pairs["off"]) == 3 and all(torch.equal(m, f) for f, m in pairs["off"]))
+    check("  negative control: these features aren't mirror-symmetric",
+          not any(torch.equal(f, torch.flip(f, [2])) for f, _ in pairs["on"]))
+    check("  negative control: with the same weights, the switch changes the loss", losses["on"] != losses["off"],
+          f"{losses['on']:.6f} vs {losses['off']:.6f}")
+
+
 def check_config(cfg):
     print("\nconfig: config/ctp_only_f13_tmax_fold0.json")
     import inspect
@@ -558,6 +598,7 @@ def main():
     check_val_hook(root, split, args.gan_bpm, parts)
     check_predictor(ckpts, state, args.gan_bpm, cfg)
     check_network(parts, ckpts, args.gan_bpm, cfg)
+    check_mirror(parts, ckpts, args.gan_bpm, cfg)
     check_config(cfg)
     check_run_py(cfg, root, split, ckpts, state, args.gan_bpm, work)
 

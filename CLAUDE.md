@@ -86,12 +86,12 @@ The paper is `1246_paper.pdf` at the repo root (untracked). It describes the asy
 
 ## The ctp-only path (this branch)
 
-`ctp_only_plan.md` is the design record: what was verified, what was decided, what is still open. What exists so far:
+`ctp_only_plan.md` is the design record: what was verified, what was decided, what is still open. `ctp_only_decisions.md` lists every decision with its date: add an entry whenever one is made. What exists so far:
 
 - **Config:** `config/ctp_only_f13_tmax_fold0.json`, f13's 3 CTP phases → Tmax on fold 0 of gan_bpm's k=5 split, with the GPU box's paths.
 - **Data:** `data/dataset.py:MCTPDataset_mask` reads the f13 root through gan_bpm's own `mctp` pipeline. gan_bpm's root is appended to `sys.path` at run time, so DataLoader workers must fork (Linux, not macOS). It returns the upstream dict plus `loss_mask` (gan_bpm's `support`). `cond_image` is deliberately **not** masked. `part` (train / monitor / test) comes from a gan_bpm fold's `split.json`.
 - **Predictor:** `models/gan_bpm_predictor.py` puts gan_bpm's generator behind BRAN's `(y, hs)` interface. It refuses a checkpoint whose config is not Tmax, 12 s, 3 phases, linear. `Network(initial_predictor={"type": "gan_bpm", ...})` selects it, and `Network.init_weights` reloads it after BaseNetwork's re-initialization.
-- **Network switches:** `mask_unet_cond` masks only the U-Net's copy of the condition, and `forward(..., loss_mask=...)` restricts the loss. With both absent, the behaviour is upstream's bit for bit.
+- **Network switches:** `mask_unet_cond` masks only the U-Net's copy of the condition, and `forward(..., loss_mask=...)` restricts the loss. With both absent, the behaviour is upstream's bit for bit. `unet.mirror_hs: false` turns off the asymmetry prior's flip (our scans aren't aligned the way the paper's were); the default keeps it.
 - **Validation set:** a `which_val_dataset` block next to `which_dataset` replaces the random slice split.
 - **Checks:** `scripts/ctp_only_checks.py` (synthetic data, CPU, including `run.py` train and test end to end) and `scripts/ctp_only_box_checks.py` (the real data, on the box: `--part cpu` by `docker run`, `--part gpu` through `condor/ctp_only_gpu_checks.sub`). Rerun the first after changing any of these files. The GPU smoke run (`run.py` train → test in debug mode, then `scripts/ctp_only_gpu_probe.py` for memory and time per step by batch size) is `condor/ctp_only_smoke.sub`.
 - **Environment:** jobs run in `registry.cvib.ucla.edu/colivares:mrdpm-env-v1` (`Dockerfile`: gan_bpm's image plus MRDPM's missing packages). It has pandas 3, under which upstream's `LogTracker.reset` raised (fixed in `core/logger.py`).

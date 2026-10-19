@@ -2,7 +2,9 @@
 
 **Status (2026-10-19): steps 0–2 (§13) are done: the input path (§7.1) and the loss mask (§7.2)
 are decided, and the build passes every check, synthetic and on the real data (§12). The
-orientation is right (§6). Next: the GPU smoke run, step 3, built as `condor/ctp_only_smoke.sub`.** Branch `ctp-only`. This doc collects what
+orientation is right (§6), but the scans aren't aligned, so the asymmetry flip is off (§6). Next:
+the GPU smoke run, step 3, built as `condor/ctp_only_smoke.sub`.** Decisions, dated, are listed
+in `ctp_only_decisions.md`. Branch `ctp-only`. This doc collects what
 was read and decided in conversation so far. Items marked **(verified)** were checked against
 code or data; items marked **(proposal)** wait for Carlos's agreement.
 
@@ -179,7 +181,10 @@ Both conversions are affine and exact in both directions. Nothing in MRDPM's ran
   the initial predictor's feature maps `hs` (H/2, H/4, H/8) before fusing them. With BRAN
   replaced, `hs` are gan_bpm's decoder features, so the U-Net mirrors those.
 - gan_bpm trains with no augmentation at all (`mctp/transforms.py:build_transforms`), so its
-  generator has only seen scans as stored. Options in §15.
+  generator has only seen scans as stored.
+- **Decision (Carlos, 2026-10-19): no flip.** `unet.mirror_hs: false` keeps the module's
+  feature path but pairs each feature map with itself, not its mirror image
+  (`ctp_only_decisions.md` #10). Report the model as MRDPM without the asymmetry prior.
 
 ---
 
@@ -433,10 +438,10 @@ intermediate tensors. A check enforces that `y` is bitwise equal to `Generator.f
 | `models/__init__.py` | the train log records the predictor's checkpoint, sha256 and epoch | unchanged for BRAN |
 | `core/base_network.py` | skips `./tmax_net_G.pth` when the predictor loads its own checkpoint | unchanged for BRAN |
 | `core/logger.py` | `LogTracker.reset` no longer writes through `.values` (below) | same values |
+| `models/guided_diffusion_modules/unet.py` | `UNet(mirror_hs=...)` → `cond_resample(mirror=...)`: when off, the asymmetry module pairs the predictor's features with themselves instead of their flip (§6). Same layers and shapes | the flip, as upstream |
 | `config/ctp_only_f13_tmax_fold0.json` | new config (§11) | n/a |
 
-**Untouched:** the diffusion maths, `unet.py`, the asymmetry module, the training loop, EMA,
-checkpointing and `run.py`.
+**Untouched:** the diffusion maths, the training loop, EMA, checkpointing and `run.py`.
 
 **An upstream bug, fixed in `core/logger.py`.** Under pandas ≥ 3, `self._data[col].values` is a
 read-only view, so `LogTracker.reset` raised and `Palette` could not be built. The box image
@@ -477,7 +482,7 @@ What differs from `config/npy_1000linear_-6_-2_b4_nc64.json`:
   the v2 root and fold 0's `split.json`. The monitor is 1 patient per dataset, at most 32
   slices.
 - **Network:** `initial_predictor` = gan_bpm's fold-0 `best.pt` with `expect_fold: 0`;
-  `mask_unet_cond: true`; `unet.in_channel` 4 and `image_size` 512.
+  `mask_unet_cond: true`; `unet.in_channel` 4, `image_size` 512 and `mirror_hs: false` (§6).
 - **Output:** `path.base_dir` = `/radraid2/colivares/mrdpm_ctp_only/experiments`, not the repo.
 - **Batch:** train 1 (to measure, §14). Monitor and test 4: sampling only, no gradients.
 - **`save_checkpoint_epoch` 10, not 1:** each save is 1.1 GB (§14).
@@ -649,10 +654,12 @@ a perfectly round head).
 - **EMA at test:** the code validates and tests with `netG`, not the EMA copy. The paper says
   EMA "was employed" without saying where.
 - **Monitor subset size** and `val_epoch`, once seconds per step are known.
-- **Alignment for the asymmetry prior** (§6). The paper rotated and centred its images; ours
-  are tilted and off-centre, so the flip mirrors misaligned hemispheres. In the paper's
+- ~~**Alignment for the asymmetry prior**~~ Decided 2026-10-19: no flip (`mirror_hs: false`,
+  §6). The options below are what it would take to turn it back on.
+  The paper rotated and centred its images; ours are tilted and off-centre, so the flip mirrors
+  misaligned hemispheres. In the paper's
   ablation (Table 2) the asymmetry module is worth MAE 0.049 → 0.047. Options:
-  - (a) leave it, and report it as a deviation from the paper's preprocessing;
+  - (a) flip anyway, and report it as a deviation from the paper's preprocessing;
   - (b) rotate and centre each case in the data loader, as the paper did. gan_bpm's generator
     then sees inputs it was never trained on (re-check it as in §7.1), and the comparison with
     gan_bpm needs one common space;

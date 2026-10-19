@@ -309,8 +309,9 @@ class QKVAttention(nn.Module):
         return count_flops_attn(model, _x, y)
 
 class cond_resample(nn.Module):
-    def __init__(self,in_channel,out_channel,pyramid_channel=None):
+    def __init__(self,in_channel,out_channel,pyramid_channel=None,mirror=True):
         super(cond_resample,self).__init__()
+        self.mirror = mirror
         if pyramid_channel is not None:
             self.cond_resample = nn.Sequential(
                 normalization(in_channel*3+pyramid_channel),
@@ -329,7 +330,8 @@ class cond_resample(nn.Module):
             nn.Conv2d(in_channel*2,in_channel,1,1)
             )
     def forward(self,diff_feature,cond,pyramid_x=None):
-        cond_flip = torch.flip(cond,[2])
+        # mirror=False (ctp_only_decisions.md): pair the features with themselves, not their mirror image
+        cond_flip = torch.flip(cond,[2]) if self.mirror else cond
         condx = torch.cat((cond,cond_flip),1)
         cond_flip = self.flip_sample(condx)
  
@@ -364,6 +366,8 @@ class UNet(nn.Module):
     :param resblock_updown: use residual blocks for up/downsampling.
     :param use_new_attention_order: use a different attention pattern for potentially
                                     increased efficiency.
+    :param mirror_hs: if False, the asymmetry prior's modules skip the flip of the
+                      initial predictor's features; every layer keeps its shape.
     """
 
     def __init__(
@@ -385,6 +389,7 @@ class UNet(nn.Module):
         use_scale_shift_norm=True,
         resblock_updown=True,
         use_new_attention_order=False,
+        mirror_hs=True,
     ):
 
         super().__init__()
@@ -545,9 +550,9 @@ class UNet(nn.Module):
             SiLU(),
             zero_module(nn.Conv2d(input_ch, out_channel, 3, padding=1)),
         )
-        self.cond_resample1 = cond_resample(64,128)
-        self.cond_resample2 = cond_resample(128,256,64)
-        self.cond_resample3 = cond_resample(256,512,128+64)
+        self.cond_resample1 = cond_resample(64,128,mirror=mirror_hs)
+        self.cond_resample2 = cond_resample(128,256,64,mirror=mirror_hs)
+        self.cond_resample3 = cond_resample(256,512,128+64,mirror=mirror_hs)
 
     def forward(self, x, gammas, cond):
         """
