@@ -173,6 +173,15 @@ The reasoning, measurements and code details live in `ctp_only_plan.md` (the § 
   changes because of what a held-out fold shows.
 - **Status:** decided (Carlos). Plan §17.
 
+### 16. 2026-10-19 · No fixed seed (`seed: -1`, upstream's)
+
+- **Decision:** keep upstream's `seed: -1`. Runs aren't bit-reproducible: the data order and the
+  noise differ from run to run.
+- **Why:** a fixed seed also switches cuDNN to deterministic mode (`core/util.py:set_seed`),
+  which is slower. With `-1`, cuDNN benchmarks its convolution methods on the first step: a
+  first-epoch memory peak of 90 GiB on the H100, the card's own either way.
+- **Status:** decided (Carlos). Plan §13 step 4.
+
 ---
 
 ## Open
