@@ -650,6 +650,25 @@ a perfectly round head).
   - During the smoke run, `nvidia-smi` showed up to 40.6 GB in use on the card, against
     PyTorch's 12.75 GiB peak at batch 1. `nvidia-smi` counts PyTorch's cache and anything else
     on the card. Not explained yet; a training job should get a card to itself.
+- **The H100 NVL box (verified 2026-10-19, `condor/ctp_only_probe_remote.sub`, REDLRADADM35838,
+  93.1 GiB usable; TF32 on in convolutions by PyTorch's default, off in matmuls):**
+
+  | step | batch | s/step | peak allocated | vs the RTX 8000 |
+  |---|---|---|---|---|
+  | train | 1 | 0.133 | 12.72 GiB | 4.2× faster |
+  | | 2 | 0.222 | 24.11 GiB | 4.8× |
+  | | 4 | 0.400 | 46.88 GiB | (didn't fit) |
+  | | 6 | 0.593 | 69.66 GiB | |
+  | | 8 | out of memory | | |
+  | sample | 1 | 0.042 | 3.72 GiB | 4.1× |
+  | | 16 | 0.436 | 39.68 GiB | 4.8× |
+  | | 32 | 0.878 | 78.04 GiB | |
+
+  - 200 epochs: 22.9 h at batch 1, 17.2 h at batch 4, 17.0 h at batch 6.
+  - A test pass (793 slices): 6.1 h at batch 16 or 32. The configured monitoring (32 slices every
+    10 epochs): 20 × 0.26 h = 5.2 h.
+  - So one fold is about a day on one H100, against about 6.5 days on an RTX 8000.
+  - The box has none of 14958's paths: a real run there needs the data on that machine.
 - **512 vs 256.** The generator was trained at 512, so the diffusion U-Net runs at 512. That
   is about 4× the paper's per-step cost.
   - **Attention (verified, correcting an earlier line here).** `attn_res: [16]` never
