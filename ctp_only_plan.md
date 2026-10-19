@@ -652,8 +652,18 @@ a perfectly round head).
      The config's `seed: -1` (upstream's) makes `core/util.py:set_seed` turn on cuDNN
      benchmarking, which tries convolution algorithms with large workspaces on the first step.
      The probe ran without it. Later epochs' peaks are in `train.csv`.
-   - **Fold 0 submitted 2026-10-19.** Folds 1–4: `condor/ctp_only_folds_1_4.dag`, the same job
-     per fold, one at a time (`MAXJOBS h100 1`, no dependencies between folds, no retries).
+   - **Fold 0 submitted 2026-10-19** (the per-job copy into the workspace). Folds 1–4:
+     `condor/ctp_only_folds_1_4.dag`, the same job per fold, one at a time (`MAXJOBS h100 1`, no
+     dependencies between folds, no retries).
+   - **Then moved to the H100 box's own disk** (decisions #17). Condor's job workspace on that box
+     is 55 GB in all, on the 98 GB system disk, shared by 8 GPUs (`condor_status`: `TotalDisk`
+     55,404,928 KB; `EXECUTE` = `/var/lib/condor/execute`); fold 0 held 24 GB of it. A job can
+     see and write the box's 84 TB `/home` (7.1 TB free). So `condor/ctp_only_stage_home.sub`
+     copies all 443 cases' Tmax files, gan_bpm's code and the 5 fold generators there once
+     (`ctp_only_stage_data.py --side all`; it checks the generators' sha256 and every file the
+     split needs, then writes `STAGED_OK`). The training job now reads from there, keeps its run
+     folder in `/home/colivares/mrdpm_ctp_only/experiments/<cluster.process>/`, and asks for 2 GB
+     of workspace.
 5. **Score against gan_bpm fold 0** on the held-out fold, in seconds, over `support`.
    - Proposal: write MRDPM's `Out_` maps as gan_bpm's external-maps `.npz`
      (`pred_norm = 2·out − 1`), so gan_bpm's evaluation code scores both models the same way.

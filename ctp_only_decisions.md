@@ -182,6 +182,22 @@ The reasoning, measurements and code details live in `ctp_only_plan.md` (the § 
   first-epoch memory peak of 90 GiB on the H100, the card's own either way.
 - **Status:** decided (Carlos). Plan §13 step 4.
 
+### 17. 2026-10-19 · On the H100 box, data and run folders live on its own `/home`
+
+- **Decision:** a one-time Condor job (`condor/ctp_only_stage_home.sub`) copies the Tmax files of
+  all 443 cases (about 17 GB), gan_bpm's code and the 5 fold generators from the `/radraid2`
+  stage to `/home/colivares/mrdpm_ctp_only/stage` on the H100 box. Training jobs read them there
+  and write their run folders there, asking Condor for 2 GB of workspace instead of 24. Results
+  still go to `/radraid2/colivares/mrdpm_ctp_only/runs/` every 10 minutes, since 14958 can't see
+  that disk. This supersedes #13's per-job copy into the workspace.
+- **Why:**
+  - Condor gives jobs only about 55 GB of workspace on that box, shared by its 8 GPUs (job
+    workspace is on the 98 GB system disk). One of our jobs held 24 GB of it.
+  - `/home` there is the machine's own 84 TB disk (7.1 TB free), visible and writable from jobs.
+  - The cluster's rule is against running on the network shares; `/home` is local to the box.
+    Carlos confirmed that jobs may use it.
+- **Status:** decided (Carlos). Plan §13 step 4.
+
 ---
 
 ## Open

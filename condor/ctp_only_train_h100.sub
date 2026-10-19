@@ -1,10 +1,11 @@
 # Train MRDPM (ctp-only, f13 Tmax) on the H100 NVL box, one fold per job (ctp_only_plan.md §13
 # step 4; recipe in ctp_only_decisions.md #11-#12). About 20 h for 200 epochs.
 #
-# Follows the cluster's rule for data on the network share: the job copies the staged data from
-# /radraid2/colivares/mrdpm_ctp_only/stage into its workspace, trains there, and moves its
-# results to /radraid2/colivares/mrdpm_ctp_only/runs/<experiment>/ as it goes and at the end.
-# The code is this checkout on 14958, shipped by Condor: git pull before submitting.
+# The data are read from the H100 box's own disk, /home/colivares/mrdpm_ctp_only/stage: run
+# ctp_only_stage_home.sub once first (ctp_only_decisions.md #17). The run folder is written there
+# too, and its results go to /radraid2/colivares/mrdpm_ctp_only/runs/<experiment>/ every 10
+# minutes and at the end. The code is this checkout on 14958, shipped by Condor: git pull before
+# submitting.
 #
 #   cd condor && mkdir -p log
 #   condor_submit ctp_only_train_h100.sub                              # debug: 1 epoch, 2 slices
@@ -18,7 +19,7 @@ universe                = docker
 docker_image            = registry.cvib.ucla.edu/colivares:mrdpm-env-v1
 
 executable              = ctp_only_train_h100.sh
-arguments               = $(fold:0) $(mode:debug) $(resume:)
+arguments               = $(fold:0) $(mode:debug) $(Cluster).$(Process) $(resume:)
 # No trailing slash: the checkout arrives in the workspace as MRDPM-with-RAP_fork/.
 transfer_input_files    = /raid/colivares/github_repos/MRDPM-with-RAP_fork
 should_transfer_files   = YES
@@ -35,9 +36,9 @@ requirements            = (Machine == "$(gpu_host:REDLRADADM35838).ad.medctr.ucl
 request_gpus            = 1
 request_cpus            = 8
 request_memory          = 32G
-# The fold's training cases (13.3 GB for fold 0, by scripts/ctp_only_stage_data.py --dry-run),
-# two checkpoints (1.1 GB each), the monitor maps (~2.5 GB), the code: about 18 GB.
-request_disk            = 24G
+# Only the code, run.py's output and the job config live in the workspace; data and the run
+# folder are on /home.
+request_disk            = 2G
 
 output                  = log/ctp_only_train_h100.$(cluster).$(process).out
 error                   = log/ctp_only_train_h100.$(cluster).$(process).err

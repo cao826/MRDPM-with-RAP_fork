@@ -303,6 +303,16 @@ def check_stage(root, split, gan_bpm, work):
     held_out = rows[rows["case_id"].isin(json.loads(split.read_text())["val_case_ids"])]
     check("  negative control: the held-out cases' files were not copied",
           len(held_out) > 0 and not any((dst / f).exists() for f in held_out["input_relpath"]))
+    both = work / "staged_all"
+    shutil.rmtree(both, ignore_errors=True)
+    cmd = [sys.executable, str(REPO / "scripts/ctp_only_stage_data.py"), str(root), str(both),
+           "--split", str(split), "--side", "all"]
+    first, again = (subprocess.run(cmd, capture_output=True, text=True) for _ in range(2))
+    in_split = rows[rows["case_id"].isin(set(json.loads(split.read_text())["train_case_ids"]) | set(held_out["case_id"]))]
+    check("--side all copies both sides' files; a rerun copies nothing but the index",
+          first.returncode == 0 and again.returncode == 0
+          and all((both / f).is_file() for f in list(in_split["input_relpath"]) + list(in_split["label_relpath"]))
+          and "copied 0.0 GB" in again.stdout, again.stdout.strip()[-90:])
 
 
 def check_predictor(ckpts, state, gan_bpm, cfg):

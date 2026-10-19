@@ -15,10 +15,9 @@
 # MAXJOBS counts only this DAG's jobs: fold 0, submitted on its own, holds its own GPU until it
 # finishes, so the account holds 2 while both run.
 #
-# WORKSPACE DISK
-# Each job uses about 18 GB of the H100 box's local disk (41 GB free when probed, shared with
-# other jobs). While fold 0 runs, fold 1 may wait for room, or start and stop at once:
-# scripts/ctp_only_stage_data.py refuses to copy into too little space, before training.
+# DATA
+# Every node reads the copy on the H100 box's /home (condor/ctp_only_stage_home.sub, run once
+# first), so the folds don't compete for job workspace disk.
 #
 # NO RETRY
 # A retried node would restart its fold from epoch 0. If a node fails, DAGMan finishes the
