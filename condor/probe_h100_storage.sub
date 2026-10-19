@@ -1,0 +1,27 @@
+# What can a Condor job on the H100 NVL box (REDLRADADM35838) reach? That machine takes no
+# logins. The cluster's rule: put data on the network share (/radraid), copy it into the job's
+# workspace at the start of each job, and move results back at the end. This checks that a job
+# there sees /radraid and /radraid2, can write back, has room for the dataset, and how fast a
+# copy from /radraid2 is. It creates and removes one empty test directory. About a minute.
+#
+#   cd condor && mkdir -p log && condor_submit probe_h100_storage.sub
+#   cat log/probe_h100_storage.<cluster>.0.out      # paste this back
+universe                = docker
+docker_image            = registry.cvib.ucla.edu/colivares:mrdpm-env-v1
+
+executable              = probe_h100_storage.sh
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT
+
+requirements            = (Machine == "REDLRADADM35838.ad.medctr.ucla.edu")
+
+# No GPU: nothing here needs one, and asking for one makes it queue behind training jobs.
+request_cpus            = 1
+request_memory          = 2G
+request_disk            = 2G
+
+output                  = log/probe_h100_storage.$(cluster).$(process).out
+error                   = log/probe_h100_storage.$(cluster).$(process).err
+log                     = log/probe_h100_storage.$(cluster).$(process).log
+
+queue
