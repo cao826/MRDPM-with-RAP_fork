@@ -1,6 +1,6 @@
 #!/bin/bash
 # Invoked by probe_h100_storage.sub. Can a job on this machine reach the network shares
-# (/radraid, /radraid2), write back to them, and fit the dataset in its own workspace? And how
+# (/radraid, /radraid2) and the machine's own 84 TB home volume, write to them, and fit the dataset in its own workspace? And how
 # fast is a copy from /radraid2 into that workspace?
 set -u
 
@@ -9,10 +9,10 @@ echo "host: $(hostname)   date: $(date -Is)   user: $(id)"
 echo "workspace: $W"
 echo "==================================================================="
 echo "--- mounts that look like data storage"
-grep -E ' /(raid|radraid|data|scratch|mnt)' /proc/mounts || echo "(none matched)"
+grep -E ' /(raid|radraid|data|scratch|mnt|home)' /proc/mounts || echo "(none matched)"
 
 echo "--- directories: exists? owner? free space?"
-for d in /radraid /radraid/colivares /radraid2 /radraid2/colivares /raid "$W"; do
+for d in /radraid /radraid/colivares /radraid2 /radraid2/colivares /raid /home /home/colivares "$W"; do
     if [ -d "$d" ]; then
         echo "$(ls -ld "$d")"
         df -h "$d" | tail -1
@@ -22,7 +22,7 @@ for d in /radraid /radraid/colivares /radraid2 /radraid2/colivares /raid "$W"; d
 done
 
 echo "--- can a job write results back?"
-for d in /radraid2/colivares /radraid/colivares; do
+for d in /radraid2/colivares /radraid/colivares /home/colivares; do
     [ -d "$d" ] || continue
     t="$d/.condor_write_test_$$"
     if mkdir "$t" 2>/dev/null; then
