@@ -36,18 +36,19 @@ done
 echo "--- copy speed, /radraid2 -> workspace (the probe bundle's 32 slices, about 200 MB)"
 src=/radraid2/colivares/mrdpm_ctp_only/probe_bundle/batch.pt
 if [ -f "$src" ]; then
-    t0=$(date +%s.%N)
+    t0=$(date +%s%N)
     cp "$src" "$W/copy_test.pt"
-    t1=$(date +%s.%N)
+    t1=$(date +%s%N)
     mb=$(du -m "$W/copy_test.pt" | cut -f1)
-    echo "$mb MB in $(echo "$t1 - $t0" | bc) s"
+    ms=$(( (t1 - t0) / 1000000 ))
+    echo "$mb MB in $ms ms: $(( mb * 1000 / (ms > 0 ? ms : 1) )) MB/s"
     rm -f "$W/copy_test.pt"
 else
     echo "absent: $src"
 fi
 
 echo "--- tools in the image"
-for c in rsync cp tar bc; do
+for c in rsync cp tar; do
     printf '%-6s %s\n' "$c" "$(command -v "$c" || echo '<missing>')"
 done
 echo "==================================================================="

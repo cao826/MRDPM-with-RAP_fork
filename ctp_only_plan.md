@@ -668,7 +668,22 @@ a perfectly round head).
   - A test pass (793 slices): 6.1 h at batch 16 or 32. The configured monitoring (32 slices every
     10 epochs): 20 × 0.26 h = 5.2 h.
   - So one fold is about a day on one H100, against about 6.5 days on an RTX 8000.
-  - The box has none of 14958's paths: a real run there needs the data on that machine.
+  - **What a job on the H100 box can reach (verified 2026-10-19, `condor/probe_h100_storage.sub`).**
+    The box takes no logins, only Condor jobs.
+    - `/radraid` and `/radraid2` are NFS shares, the same ones 14958 sees, and a job can write
+      back to `/radraid*/colivares`. (gan_bpm's Condor notes call `/radraid2` per-machine; it
+      isn't.)
+    - Its `/raid` is a different, empty, root-owned directory on the local disk.
+    - The job's workspace is on the local disk too: 98 GB, 41 GB free at the time, shared with
+      every other job on the box.
+    - The image has `cp` and `tar` but no `rsync`.
+  - **The cluster's rule** (Carlos's knowledge doc): don't run on data in `/radraid*`. Put the
+    data on the share once, copy it into the job's workspace at the start of every job, and move
+    the results back at the end.
+  - **Plan:** a one-time copy of the dataset and gan_bpm's code from 14958's `/raid` to
+    `/radraid2/colivares/mrdpm_ctp_only/stage/`. Each H100 job copies them into its workspace.
+    Workspace disk is the tight resource: the dataset plus checkpoints (1.1 GB each) must fit,
+    so not every checkpoint can stay there until the end.
 - **512 vs 256.** The generator was trained at 512, so the diffusion U-Net runs at 512. That
   is about 4× the paper's per-step cost.
   - **Attention (verified, correcting an earlier line here).** `attn_res: [16]` never

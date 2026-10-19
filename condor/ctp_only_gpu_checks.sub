@@ -11,7 +11,7 @@ executable              = ctp_only_gpu_checks.sh
 should_transfer_files   = YES
 when_to_transfer_output = ON_EXIT
 
-# /raid and /radraid2 are per-machine; the checkout, checkpoint, split and data all live on 14958's.
+# /raid is per-machine: the checkout and the data live on 14958's. (/radraid2 is a network share.)
 requirements            = (Machine == "REDLRADADM14958.ad.medctr.ucla.edu")
 # DataLoader workers hand batches over through /dev/shm.
 +DevShmSize             = 8589934592
