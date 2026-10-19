@@ -520,7 +520,7 @@ labels above 12 s, one patient with two cases) and fake gan_bpm checkpoints.
     buffers), so the predictor tested is the fine-tuned one.
 
 **`scripts/ctp_only_box_checks.py`: the real data and checkpoint, on the box, in two parts.
-Not run yet.** Tested on the laptop against a 512 fixture (the gpu part with CUDA stubbed to the
+The gpu part passes 6/6 (2026-10-19); the cpu part is not run yet.** Tested on the laptop against a 512 fixture (the gpu part with CUDA stubbed to the
 CPU): everything passes except the two checks that cannot there (the sha256, and orientation on
 a perfectly round head).
 
@@ -534,7 +534,8 @@ a perfectly round head).
 - **`--part gpu`** (Condor, `condor/ctp_only_gpu_checks.sub`):
   1. The checkpoint, as above.
   2. Control: the predictor alone, through MRDPM's dataset and wrapper, reproduces
-     `val_L_pix_brain` = 0.2388 (1.433 s).
+     `val_L_pix_brain` = 0.2388 (1.433 s). **Result:** 0.238780 against the stored 0.238780,
+     over the 793 held-out slices.
   3. The Network from the real config at 512: the predictor's weights after init, one forward,
      its time and peak memory at batch 1.
 
@@ -590,7 +591,10 @@ a perfectly round head).
     middle block's, at H/8. That is 64 × 64 = 4,096 tokens at 512, against the paper's
     1,024 at 256: 16× the attention memory.
   - The batch size has to be measured. The paper used 4 at 256 on a 40 GB A100.
-  - One forward of one 512 slice, without gradients, takes 15 s on the laptop's CPU.
+  - One forward of one 512 slice, without gradients (verified, gpu check, Quadro RTX 8000,
+    47.3 GiB): 0.193 s warm, 2.68 GiB peak allocated. On the laptop's CPU it takes 15 s.
+  - That is roughly one sampling step, so one slice sampled at batch 1 costs about 1,000 ×
+    0.19 s ≈ 3 min. Batching should lower the per-slice cost; step 3 measures by how much.
 - **Size (verified).** The U-Net has 68.5 M parameters and the predictor 1.9 M. One save is
   the Network (282 MB), its EMA copy (282 MB) and the optimizer state (564 MB): 1.1 GB. Saving
   every 10 epochs, a 200-epoch run writes about 22 GB.
