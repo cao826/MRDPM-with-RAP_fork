@@ -519,20 +519,24 @@ labels above 12 s, one patient with two cases) and fake gan_bpm checkpoints.
   - The MRDPM checkpoint covers every weight (`strict=False` skips only the six noise-schedule
     buffers), so the predictor tested is the fine-tuned one.
 
-**`scripts/ctp_only_box_checks.py`: the real data and checkpoint, CPU, on the box. Not run
-yet.** Tested on the laptop against a 512 fixture: everything passes except the two checks
-that cannot there (the sha256, and orientation on a perfectly round head).
+**`scripts/ctp_only_box_checks.py`: the real data and checkpoint, on the box, in two parts.
+Not run yet.** Tested on the laptop against a 512 fixture (the gpu part with CUDA stubbed to the
+CPU): everything passes except the two checks that cannot there (the sha256, and orientation on
+a perfectly round head).
 
-1. The real checkpoint loads, with §13's sha256, and was trained on this root.
-2. The parts against `split.json`; the monitor is 1 patient per dataset.
-3. The test part against gan_bpm's own validation loader, built from the checkpoint's
-   config: the same slices in the same order, the same values.
-4. Control: the predictor alone, through MRDPM's dataset and wrapper, reproduces
-   `val_L_pix_brain` = 0.2388 (1.433 s).
-5. Orientation (§6): the envelope's mirror dice across each axis, as stored and re-centred,
-   plus `orientation.png` (a slice, its `flip(dim=2)`, the overlay) to check by eye.
-6. The Network from the real config at 512: the predictor's weights after init, and one
-   forward.
+- **`--part cpu`** (`docker run` on the box, data only):
+  1. The real checkpoint loads, with §13's sha256, and was trained on this root.
+  2. The parts against `split.json`; the monitor is 1 patient per dataset.
+  3. The test part against gan_bpm's own validation loader, built from the checkpoint's
+     config: the same slices in the same order, the same values.
+  4. Orientation (§6): the envelope's mirror dice across each axis, as stored and re-centred,
+     plus `orientation.png` (a slice, its `flip(dim=2)`, the overlay) to check by eye.
+- **`--part gpu`** (Condor, `condor/ctp_only_gpu_checks.sub`):
+  1. The checkpoint, as above.
+  2. Control: the predictor alone, through MRDPM's dataset and wrapper, reproduces
+     `val_L_pix_brain` = 0.2388 (1.433 s).
+  3. The Network from the real config at 512: the predictor's weights after init, one forward,
+     its time and peak memory at batch 1.
 
 ---
 

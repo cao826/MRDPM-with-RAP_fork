@@ -1,18 +1,25 @@
 """ctp_only_plan.md §12 on the box: the checks that need the real f13 data and gan_bpm checkpoint.
 
-CPU only, in the job image, from the MRDPM repo root:
+Two parts, run separately, both from the MRDPM repo root in the job image:
 
-    python scripts/ctp_only_box_checks.py --out /radraid2/colivares/mrdpm_ctp_only/box_checks
+    python scripts/ctp_only_box_checks.py --part cpu --out /radraid2/colivares/mrdpm_ctp_only/box_checks
+    python scripts/ctp_only_box_checks.py --part gpu --out ...    # condor/ctp_only_gpu_checks.sub
 
-1. The real checkpoint loads into the predictor, with the sha256 the plan recorded (§13).
+Both parts start with 1: the real checkpoint loads into the predictor, with the sha256 the plan
+recorded (§13), and was trained on this data root.
+
+--part cpu (data only, no model passes):
 2. The three parts against fold 0's split.json, and the monitor's size.
 3. The test part, slice for slice, against gan_bpm's own validation loader, built from the
    checkpoint's config as scripts/masked_input_check.py does: same slices, same values.
-4. Control: the predictor alone, through MRDPM's dataset and wrapper, must score the
-   checkpoint's stored val_L_pix_brain on the test part.
-5. Orientation (§6): which array axis the brain mirrors across, and what MRDPM's flip
+4. Orientation (§6): which array axis the brain mirrors across, and what MRDPM's flip
    along dim 2 does to the envelope. Also orientation.png, one slice and its flip.
-6. Network from the real config at 512: the predictor's weights after init, one forward.
+
+--part gpu (model passes, CUDA required):
+2. Control: the predictor alone, through MRDPM's dataset and wrapper, must score the
+   checkpoint's stored val_L_pix_brain on the test part.
+3. Network from the real config at 512: the predictor's weights after init, one forward, its
+   time and the peak memory.
 """
 import argparse
 import json
@@ -23,6 +30,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))       # MRDPM's `models` and `data` must win over gan_bpm's
@@ -79,39 +87,7 @@ def recentre(m, axis):
     return np.roll(m, int(round((m.shape[axis] - 1) / 2 - centroid)), axis=axis)
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("--out", type=Path, required=True)
-    p.add_argument("--config", type=Path, default=CONFIG)
-    p.add_argument("--threads", type=int, default=8)
-    p.add_argument("--batch-size", type=int, default=8)
-    p.add_argument("--skip-score", action="store_true", help="skip check 4 (a generator pass over the test part)")
-    args = p.parse_args()
-    torch.set_num_threads(args.threads)
-    args.out.mkdir(parents=True, exist_ok=True)
-
-    cfg = load_config(args.config)
-    net_args = cfg["model"]["which_networks"][0]["args"]
-    ip = net_args["initial_predictor"]
-    ds_args = {p: cfg["datasets"][s][k]["args"] for p, (s, k) in
-               {"train": ("train", "which_dataset"), "monitor": ("train", "which_val_dataset"),
-                "test": ("test", "which_dataset")}.items()}
-    gan_bpm = Path(ip["gan_bpm_root"])
-    if str(gan_bpm) not in sys.path:
-        sys.path.append(str(gan_bpm))
-    summary = {}
-
-    print("1. the gan_bpm checkpoint")
-    from models.gan_bpm_predictor import GanBpmInitialPredictor
-    P = GanBpmInitialPredictor(**{k: v for k, v in ip.items() if k != "type"}).eval()
-    prov = P.provenance
-    print(f"     {prov}")
-    check("loads into the predictor (config guards, strict weights)", True)
-    check("sha256 is the one recorded in the plan", prov["sha256"] == PLAN_SHA256, prov["sha256"][:16])
-    check("it was trained on this data root", Path(str(prov["data_root"])) == Path(ds_args["train"]["mctp_root"]),
-          str(prov["data_root"]))
-    ckpt = torch.load(ip["checkpoint"], map_location="cpu", weights_only=False)
-
+def cpu_part(args, ds_args, ckpt, gan_bpm, summary):
     print("\n2. parts against split.json")
     from data.dataset import MCTPDataset_mask
     parts = {p: MCTPDataset_mask(**a) for p, a in ds_args.items()}
@@ -138,47 +114,31 @@ def main():
     check("the same slices in the same order", same_rows, f"{len(test)} vs {len(ref)}")
     worst_cond = worst_gt = 0.0
     exact = {"loss_mask": True, "mask": True}
+    sizes, rows = [], []                # envelope sizes and mirror dice, for section 4
+    loader = lambda ds: DataLoader(ds, batch_size=None, num_workers=args.workers)
+    pairs = zip(loader(test), loader(ref)) if same_rows else ((item, None) for item in loader(test))
     t0 = time.time()
-    for i in range(len(test) if same_rows else 0):
-        item, (image, label, m) = test[i], ref[i]
+    for item, r in pairs:
+        env = item["mask"][0].numpy().astype(bool)
+        sizes.append(int(env.sum()))
+        if env.sum() >= 1000:
+            rows.append([dice(env, env[::-1, :]), dice(env, env[:, ::-1]),
+                         dice(recentre(env, 0)[::-1, :], recentre(env, 0)),
+                         dice(recentre(env, 1)[:, ::-1], recentre(env, 1))])
+        if r is None:
+            continue
+        image, label, m = r
         worst_cond = max(worst_cond, float((2 * item["cond_image"] - 1 - image[0]).abs().max()))
         worst_gt = max(worst_gt, float((item["gt_image"] - (label + 1) / 2 * m[MASK_ENVELOPE:MASK_ENVELOPE + 1]).abs().max()))
         exact["loss_mask"] &= torch.equal(item["loss_mask"], m[MASK_SUPPORT:MASK_SUPPORT + 1])
         exact["mask"] &= torch.equal(item["mask"], m[MASK_ENVELOPE:MASK_ENVELOPE + 1])
-    print(f"     compared {len(test)} slices in {time.time() - t0:.0f} s")
+    print(f"     read {len(sizes)} slices{' from each' if same_rows else ''} in {time.time() - t0:.0f} s")
     check("2·cond − 1 = gan_bpm's input, whole frame", same_rows and worst_cond < 1e-6, f"max {worst_cond:.1e}")
     check("gt = (gan_bpm label + 1)/2 × envelope", same_rows and worst_gt < 1e-6, f"max {worst_gt:.1e}")
     check("loss_mask = gan_bpm's support, exactly", same_rows and exact["loss_mask"])
     check("mask = gan_bpm's envelope, exactly", same_rows and exact["mask"])
 
-    if not args.skip_score:
-        print("\n4. control: the predictor alone scores gan_bpm's val_L_pix_brain")
-        from torch.utils.data import DataLoader
-        err = sup = 0.0
-        t0 = time.time()
-        with torch.no_grad():
-            for bi, b in enumerate(DataLoader(test, batch_size=args.batch_size, num_workers=0)):
-                y01, _ = P(b["cond_image"])
-                err += float(((y01 - b["gt_image"]).abs() * b["loss_mask"]).sum())
-                sup += float(b["loss_mask"].sum())
-                if bi % 20 == 0:
-                    done = min((bi + 1) * args.batch_size, len(test))
-                    print(f"     {done}/{len(test)} slices, {done / (time.time() - t0):.2f} slices/s", flush=True)
-        stored = ckpt.get("metrics", {}).get("val_L_pix_brain", ckpt.get("select_value"))
-        got = 2 * err / sup             # [0, 1] units -> gan_bpm's [-1, 1] units
-        check("pooled L1 over loss_mask = the checkpoint's val_L_pix_brain", abs(got - stored) < 1e-4 * stored,
-              f"{got:.6f} vs {stored:.6f}, {got * 6:.3f} s")
-        summary["predictor_alone"] = {"val_L_pix_brain": got, "stored": stored, "seconds": got * 6}
-
-    print("\n5. orientation: MRDPM flips dim 2, the array rows (axis 0)")
-    rows = []
-    for i in range(len(test)):
-        env = test[i]["mask"][0].numpy().astype(bool)
-        if env.sum() < 1000:
-            continue
-        rows.append([dice(env, env[::-1, :]), dice(env, env[:, ::-1]),
-                     dice(recentre(env, 0)[::-1, :], recentre(env, 0)),
-                     dice(recentre(env, 1)[:, ::-1], recentre(env, 1))])
+    print("\n4. orientation: MRDPM flips dim 2, the array rows (axis 0)")
     med = np.median(np.array(rows), axis=0)
     print(f"     {len(rows)} slices, median envelope dice with its mirror image:")
     print(f"       across axis 0 (MRDPM's flip) {med[0]:.3f} as stored, {med[2]:.3f} re-centred")
@@ -191,8 +151,7 @@ def main():
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        step = max(len(test) // 40, 1)
-        item = test[step * int(np.argmax([float(test[j]["mask"].sum()) for j in range(0, len(test), step)]))]
+        item = test[int(np.argmax(sizes))]                                # the slice with the most brain
         whole = item["cond_image"][None]                                  # (1, 3, H, W), as the U-Net sees it
         brain = whole * item["mask"][None]
         show = lambda a: np.clip(a / max(float(np.percentile(a[a > 0], 99)) if (a > 0).any() else 1.0, 1e-6), 0, 1)
@@ -213,28 +172,110 @@ def main():
     except ImportError as exc:
         print(f"     no PNG: {exc}")
 
-    print("\n6. Network from the real config, at 512")
+
+def gpu_part(args, cfg, ds_args, P, ckpt, summary):
+    dev = torch.device("cuda")
+    props = torch.cuda.get_device_properties(dev)
+    print(f"\n     {props.name}, {props.total_memory / 2**30:.1f} GiB")
+    from data.dataset import MCTPDataset_mask
+    test = MCTPDataset_mask(**ds_args["test"])
+
+    print("\n2. control: the predictor alone scores gan_bpm's val_L_pix_brain")
+    P.to(dev)
+    err = sup = 0.0
+    t0 = time.time()
+    with torch.no_grad():
+        for bi, b in enumerate(DataLoader(test, batch_size=args.batch_size, num_workers=args.workers)):
+            gt, loss_mask = b["gt_image"].to(dev), b["loss_mask"].to(dev)
+            y01, _ = P(b["cond_image"].to(dev))
+            err += float(((y01 - gt).abs() * loss_mask).sum())
+            sup += float(loss_mask.sum())
+            if bi % 20 == 0:
+                done = min((bi + 1) * args.batch_size, len(test))
+                print(f"     {done}/{len(test)} slices, {done / (time.time() - t0):.2f} slices/s", flush=True)
+    stored = ckpt.get("metrics", {}).get("val_L_pix_brain", ckpt.get("select_value"))
+    got = 2 * err / sup             # [0, 1] units -> gan_bpm's [-1, 1] units
+    check("pooled L1 over loss_mask = the checkpoint's val_L_pix_brain", abs(got - stored) < 1e-4 * stored,
+          f"{got:.6f} vs {stored:.6f}, {got * 6:.3f} s")
+    summary["predictor_alone"] = {"val_L_pix_brain": got, "stored": stored, "seconds": got * 6}
+    P.cpu()
+
+    print("\n3. Network from the real config, at 512")
     import models.loss
     from models import define_network
     net = define_network(Log(), {"phase": "train"}, cfg["model"]["which_networks"][0])
     own = net.initial_net.G.state_dict()
     check("after define_network (train), the predictor's weights are the checkpoint's",
           all(torch.equal(own[k], ckpt["generator"][k]) for k in own) and own.keys() == ckpt["generator"].keys())
+    net.to(dev)
     net.set_loss(models.loss.mse_loss)
-    net.set_new_noise_schedule(device=torch.device("cpu"), phase="train")
-    b = next(iter(torch.utils.data.DataLoader(test, batch_size=1)))
-    t0 = time.time()
+    net.set_new_noise_schedule(device=dev, phase="train")
+    b = {k: v.to(dev) for k, v in next(iter(DataLoader(test, batch_size=1))).items() if torch.is_tensor(v)}
+    torch.cuda.reset_peak_memory_stats(dev)
+    seconds = []
     with torch.no_grad():
-        loss = net(b["gt_image"], b["cond_image"], mask=b["mask"], loss_mask=b["loss_mask"])
-    check("one forward on a real 512 slice gives a finite loss", bool(torch.isfinite(loss)),
-          f"{float(loss):.4f}, {time.time() - t0:.1f} s on CPU")
+        for _ in range(2):          # the first includes CUDA's warm-up
+            t0 = time.time()
+            loss = net(b["gt_image"], b["cond_image"], mask=b["mask"], loss_mask=b["loss_mask"])
+            torch.cuda.synchronize(dev)
+            seconds.append(time.time() - t0)
+    check("one forward on a real 512 slice gives a finite loss", bool(torch.isfinite(loss)), f"{float(loss):.4f}")
+    peak = torch.cuda.max_memory_allocated(dev) / 2**30
+    print(f"     forward without gradients, batch 1: {seconds[0]:.2f} s cold, {seconds[1]:.3f} s warm, "
+          f"peak {peak:.2f} GiB allocated")
     n_unet = sum(p.numel() for p in net.denoise_fn.parameters())
     print(f"     U-Net {n_unet:,} parameters, predictor {sum(p.numel() for p in net.initial_net.parameters()):,}")
+    summary["network_forward"] = {"device": props.name, "seconds_cold": seconds[0], "seconds_warm": seconds[1],
+                                  "peak_gib": peak}
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    p.add_argument("--part", choices=["cpu", "gpu"], required=True)
+    p.add_argument("--out", type=Path, required=True)
+    p.add_argument("--config", type=Path, default=CONFIG)
+    p.add_argument("--threads", type=int, default=8)
+    p.add_argument("--workers", type=int, default=4, help="DataLoader workers (0 on macOS: they must fork)")
+    p.add_argument("--batch-size", type=int, default=8, help="for the gpu part's control")
+    args = p.parse_args()
+    torch.set_num_threads(args.threads)
+    args.out.mkdir(parents=True, exist_ok=True)
+    if args.part == "gpu" and not torch.cuda.is_available():
+        print("CUDA is not available in this process: the gpu part needs a GPU (condor/ctp_only_gpu_checks.sub)")
+        sys.exit(2)
+
+    cfg = load_config(args.config)
+    net_args = cfg["model"]["which_networks"][0]["args"]
+    ip = net_args["initial_predictor"]
+    ds_args = {p: cfg["datasets"][s][k]["args"] for p, (s, k) in
+               {"train": ("train", "which_dataset"), "monitor": ("train", "which_val_dataset"),
+                "test": ("test", "which_dataset")}.items()}
+    gan_bpm = Path(ip["gan_bpm_root"])
+    if str(gan_bpm) not in sys.path:
+        sys.path.append(str(gan_bpm))
+    summary = {}
+
+    print(f"--part {args.part}\n\n1. the gan_bpm checkpoint")
+    from models.gan_bpm_predictor import GanBpmInitialPredictor
+    P = GanBpmInitialPredictor(**{k: v for k, v in ip.items() if k != "type"}).eval()
+    prov = P.provenance
+    print(f"     {prov}")
+    check("loads into the predictor (config guards, strict weights)", True)
+    check("sha256 is the one recorded in the plan", prov["sha256"] == PLAN_SHA256, prov["sha256"][:16])
+    check("it was trained on this data root", Path(str(prov["data_root"])) == Path(ds_args["train"]["mctp_root"]),
+          str(prov["data_root"]))
+    ckpt = torch.load(ip["checkpoint"], map_location="cpu", weights_only=False)
+
+    if args.part == "cpu":
+        cpu_part(args, ds_args, ckpt, gan_bpm, summary)
+    else:
+        gpu_part(args, cfg, ds_args, P, ckpt, summary)
 
     n_fail = RESULTS.count(False)
     summary["checks"] = {"passed": len(RESULTS) - n_fail, "total": len(RESULTS)}
-    (args.out / "summary.json").write_text(json.dumps(summary, indent=2, default=str) + "\n")
-    print(f"\n{len(RESULTS) - n_fail}/{len(RESULTS)} checks passed; wrote {args.out / 'summary.json'}")
+    out = args.out / f"summary_{args.part}.json"
+    out.write_text(json.dumps(summary, indent=2, default=str) + "\n")
+    print(f"\n{len(RESULTS) - n_fail}/{len(RESULTS)} checks passed ({args.part}); wrote {out}")
     sys.exit(1 if n_fail else 0)
 
 

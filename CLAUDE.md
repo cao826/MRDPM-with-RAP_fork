@@ -93,7 +93,7 @@ The paper is `1246_paper.pdf` at the repo root (untracked). It describes the asy
 - **Predictor:** `models/gan_bpm_predictor.py` puts gan_bpm's generator behind BRAN's `(y, hs)` interface. It refuses a checkpoint whose config is not Tmax, 12 s, 3 phases, linear. `Network(initial_predictor={"type": "gan_bpm", ...})` selects it, and `Network.init_weights` reloads it after BaseNetwork's re-initialization.
 - **Network switches:** `mask_unet_cond` masks only the U-Net's copy of the condition, and `forward(..., loss_mask=...)` restricts the loss. With both absent, the behaviour is upstream's bit for bit.
 - **Validation set:** a `which_val_dataset` block next to `which_dataset` replaces the random slice split.
-- **Checks:** `scripts/ctp_only_checks.py` (synthetic data, CPU, including `run.py` train and test end to end) and `scripts/ctp_only_box_checks.py` (the real data, on the box). Rerun the first after changing any of these files.
+- **Checks:** `scripts/ctp_only_checks.py` (synthetic data, CPU, including `run.py` train and test end to end) and `scripts/ctp_only_box_checks.py` (the real data, on the box: `--part cpu` by `docker run`, `--part gpu` through `condor/ctp_only_gpu_checks.sub`). Rerun the first after changing any of these files.
 - **Environment:** jobs run in `registry.cvib.ucla.edu/colivares:mrdpm-env-v1` (`Dockerfile`: gan_bpm's image plus MRDPM's missing packages). It has pandas 3, under which upstream's `LogTracker.reset` raised (fixed in `core/logger.py`).
 
 ## Repo hygiene
