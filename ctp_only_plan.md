@@ -2,8 +2,8 @@
 
 **Status (2026-10-19): steps 0–2 (§13) are done: the input path (§7.1) and the loss mask (§7.2)
 are decided, and the build passes every check, synthetic and on the real data (§12). The
-orientation is right (§6), but the scans aren't aligned, so the asymmetry flip is off (§6). Next:
-the GPU smoke run, step 3, built as `condor/ctp_only_smoke.sub`.** Decisions, dated, are listed
+orientation is right (§6), but the scans aren't aligned, so the asymmetry flip is off (§6). Step 3,
+the GPU smoke run, passed (§13, §14). Next: size the first real run.** Decisions, dated, are listed
 in `ctp_only_decisions.md`. Branch `ctp-only`. This doc collects what
 was read and decided in conversation so far. Items marked **(verified)** were checked against
 code or data; items marked **(proposal)** wait for Carlos's agreement.
@@ -610,6 +610,9 @@ a perfectly round head).
    - The job refuses to start when its container sees more than one GPU: `run.py` sets
      `CUDA_VISIBLE_DEVICES` to the config's `gpu_ids` ("0"), which is only this job's card
      when it is the only one.
+   - **Done 2026-10-19, passed:** `run.py` train → monitor pass → checkpoint 1 → test from it,
+     on a Quadro RTX 8000. Monitor and test each sampled 2 slices in about 5½ min
+     (1,000 steps at 3.07 it/s, batch 2). Probe results in §14.
 4. **The first real run:** fold 0, Tmax.
 5. **Score against gan_bpm fold 0** on the held-out fold, in seconds, over `support`.
    - Proposal: write MRDPM's `Out_` maps as gan_bpm's external-maps `.npz`
@@ -620,6 +623,28 @@ a perfectly round head).
 
 ## 14. Compute (to measure, not estimated here)
 
+- **Measured (verified 2026-10-19, `scripts/ctp_only_gpu_probe.py`, Quadro RTX 8000, 47.3 GiB):**
+
+  | step | batch | s/step | peak allocated |
+  |---|---|---|---|
+  | train (forward, backward, Adam, EMA) | 1 | 0.559 | 12.75 GiB |
+  | | 2 | 1.069 | 24.29 GiB |
+  | | 4 | out of memory | |
+  | sample (one of 1,000) | 1 | 0.174 | 3.60 GiB |
+  | | 4 | 0.619 | 10.79 GiB |
+  | | 8 | 1.237 | 20.38 GiB |
+  | | 16 | 2.095 | 39.55 GiB |
+
+  - Training: 0.48 h per epoch (3,096 slices) at batch 1, 0.46 h at batch 2. The card is
+    already busy at batch 1, so batch 2 buys no speed.
+  - Sampling: batching saves only about a quarter per slice (0.174 → 0.131 s per slice-step),
+    so one slice costs 2.2–2.9 min.
+  - As configured (200 epochs, 32 monitor slices at batch 4 every 10 epochs, test at batch 4):
+    training 96 h, monitoring 20 × 1.38 h = 28 h, test 34 h (29 h at batch 16). About 6.5 days
+    for one fold on one card.
+  - During the smoke run, `nvidia-smi` showed up to 40.6 GB in use on the card, against
+    PyTorch's 12.75 GiB peak at batch 1. `nvidia-smi` counts PyTorch's cache and anything else
+    on the card. Not explained yet; a training job should get a card to itself.
 - **512 vs 256.** The generator was trained at 512, so the diffusion U-Net runs at 512. That
   is about 4× the paper's per-step cost.
   - **Attention (verified, correcting an earlier line here).** `attn_res: [16]` never
