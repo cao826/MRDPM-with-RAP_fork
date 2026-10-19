@@ -21,6 +21,11 @@ import tempfile
 import types
 from pathlib import Path
 
+# A CPU check everywhere. The box's docker shows containers its GPUs even without --gpus, and
+# core/util.py:set_device then puts run.py's model and batches on cuda:0, next to the CPU noise
+# schedule below. Hidden before torch is imported, so torch never sees one.
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 import numpy as np
 import torch
 

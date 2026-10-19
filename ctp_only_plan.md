@@ -161,7 +161,10 @@ Both conversions are affine and exact in both directions. Nothing in MRDPM's ran
   - the builder's RAS reorientation (verified);
   - a quick symmetry check on two slices that pointed the same way, but only weakly
     (head-mask overlap with its mirror: 0.80 vs 0.75 and 0.74 vs 0.70).
-- **To do before training:** one PNG check (§12).
+- **Box check (2026-10-19, §12 cpu part):** over 792 held-out slices, the envelope's median
+  dice with its mirror, re-centred, is 0.967 across axis 0 (MRDPM's flip) and 0.945 across
+  axis 1. Axis 0 wins, but by little: a head outline is nearly symmetric both ways.
+- **To do before training:** look at `orientation.png` (§12) by eye.
 
 ---
 
@@ -476,7 +479,11 @@ Unchanged from the paper and the code: lr 5e-5, the noise schedule (1000 linear 
 
 Two scripts. Where a check could pass without testing anything, a negative control follows it.
 
-**`scripts/ctp_only_checks.py`: synthetic data, CPU. 74/74 pass on the laptop (2026-10-19).**
+**`scripts/ctp_only_checks.py`: synthetic data, CPU. 74/74 passed on the laptop (2026-10-19).**
+In the box image it passed every section up to the `run.py` run, which crashed: the box's
+docker shows containers its GPUs, so `core/util.py:set_device` put the model on `cuda:0` next to
+the script's CPU noise schedule. The script now hides the GPUs before importing torch; rerun
+pending.
 It builds a fake f13 root at 256 × 256 (three datasets, a skull, no-data holes, real zeros,
 labels above 12 s, one patient with two cases) and fake gan_bpm checkpoints.
 
@@ -520,7 +527,7 @@ labels above 12 s, one patient with two cases) and fake gan_bpm checkpoints.
     buffers), so the predictor tested is the fine-tuned one.
 
 **`scripts/ctp_only_box_checks.py`: the real data and checkpoint, on the box, in two parts.
-The gpu part passes 6/6 (2026-10-19); the cpu part is not run yet.** Tested on the laptop against a 512 fixture (the gpu part with CUDA stubbed to the
+Both parts pass (2026-10-19): cpu 13/13, gpu 6/6.** Tested on the laptop against a 512 fixture (the gpu part with CUDA stubbed to the
 CPU): everything passes except the two checks that cannot there (the sha256, and orientation on
 a perfectly round head).
 
@@ -531,6 +538,9 @@ a perfectly round head).
      config: the same slices in the same order, the same values.
   4. Orientation (§6): the envelope's mirror dice across each axis, as stored and re-centred,
      plus `orientation.png` (a slice, its `flip(dim=2)`, the overlay) to check by eye.
+  - **Result:** train 350 cases / 3,096 slices, monitor 3 cases / 32 slices (one per
+    dataset), test 90 / 793. The test part equals gan_bpm's validation set exactly (max diff 0,
+    masks exact). Orientation: §6.
 - **`--part gpu`** (Condor, `condor/ctp_only_gpu_checks.sub`):
   1. The checkpoint, as above.
   2. Control: the predictor alone, through MRDPM's dataset and wrapper, reproduces
