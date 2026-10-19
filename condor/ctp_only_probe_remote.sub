@@ -1,0 +1,35 @@
+# The memory/time probe (scripts/ctp_only_gpu_probe.py) on a GPU machine other than 14958: by
+# default the H100 NVL box (REDLRADADM35838, 95 GB per card). That machine has neither 14958's
+# /raid and /radraid2 nor its checkout, so Condor ships a bundle with the job: a clean copy of
+# this repo, 32 training slices, gan_bpm's fold-0 checkpoint and its generator.py. Make the
+# bundle first, on 14958 (the paste block in ctp_only_probe_remote.sh's header).
+#
+#   cd condor && mkdir -p log && condor_submit ctp_only_probe_remote.sub
+#   cat log/ctp_only_probe_remote.<cluster>.0.out      # paste this back
+#
+# Another machine, e.g. an L40S box:
+#   condor_submit ctp_only_probe_remote.sub -append 'gpu_host = REDLRADADM35839'
+universe                = docker
+docker_image            = registry.cvib.ucla.edu/colivares:mrdpm-env-v1
+
+executable              = ctp_only_probe_remote.sh
+# No trailing slash: the directory itself arrives in the job's scratch dir, as probe_bundle/.
+transfer_input_files    = /radraid2/colivares/mrdpm_ctp_only/probe_bundle
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT
+
+requirements            = (Machine == "$(gpu_host:REDLRADADM35838).ad.medctr.ucla.edu")
+
+request_gpus            = 1
+request_cpus            = 4
+request_memory          = 32G
+# The bundle is well under 1 GB (32 slices are about 0.2 GB).
+request_disk            = 4G
+
+output                  = log/ctp_only_probe_remote.$(cluster).$(process).out
+error                   = log/ctp_only_probe_remote.$(cluster).$(process).err
+log                     = log/ctp_only_probe_remote.$(cluster).$(process).log
+stream_output           = True
+stream_error            = True
+
+queue

@@ -613,6 +613,11 @@ a perfectly round head).
    - **Done 2026-10-19, passed:** `run.py` train → monitor pass → checkpoint 1 → test from it,
      on a Quadro RTX 8000. Monitor and test each sampled 2 slices in about 5½ min
      (1,000 steps at 3.07 it/s, batch 2). Probe results in §14.
+   - **Next (2026-10-19): the same probe on the H100 NVL box** (REDLRADADM35838, 95 GB per
+     card), `condor/ctp_only_probe_remote.sub`. That machine has none of 14958's paths, so
+     the job ships a bundle: a `git archive` of this repo, 32 training slices, the fold-0
+     checkpoint and gan_bpm's `generator.py` (`ctp_only_gpu_probe.py --make-bundle`). A real
+     run there would also need the data on that machine.
 4. **The first real run:** fold 0, Tmax.
 5. **Score against gan_bpm fold 0** on the held-out fold, in seconds, over `support`.
    - Proposal: write MRDPM's `Out_` maps as gan_bpm's external-maps `.npz`
