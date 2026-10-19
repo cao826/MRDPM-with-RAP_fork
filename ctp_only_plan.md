@@ -1,7 +1,7 @@
 # ctp-only plan: MRDPM on f13 CTP phases, with gan_bpm's generator as the initial predictor
 
-**Status (2026-10-18): proposal. Step 0 (box prerequisites, §13) is checked; nothing else is
-built.** Branch `ctp-only`. This doc collects what
+**Status (2026-10-19): proposal. Steps 0 and 1 (§13) are done, and the input path (§7.1) and
+the loss mask (§7.2) are decided; nothing else is built.** Branch `ctp-only`. This doc collects what
 was read and decided in conversation so far. Items marked **(verified)** were checked against
 code or data; items marked **(proposal)** wait for Carlos's agreement.
 
@@ -190,6 +190,37 @@ Both conversions are affine and exact in both directions. Nothing in MRDPM's ran
 
 The decision threshold is open (§15).
 
+**Result (verified 2026-10-19, `scripts/masked_input_check.py` on the box, fold 0, 90 cases,
+793 slices).** Masking costs about a fifth of the error, and the cost is about the same in every
+dataset:
+
+| | cases | slices | native | masked | Δ |
+|---|---|---|---|---|---|
+| all | 90 | 793 | 1.433 s | 1.732 s | +0.300 s (+20.9 %) |
+| isles24 | 20 | 370 | 1.133 s | 1.363 s | +0.230 s (+20.3 %) |
+| ucla_evt | 54 | 325 | 1.788 s | 2.144 s | +0.356 s (+19.9 %) |
+| ucla_neg | 16 | 98 | 1.292 s | 1.641 s | +0.349 s (+27.0 %) |
+
+The native arm's pooled L1 (0.23878) agrees with the checkpoint's `val_L_pix_brain` (0.2388).
+
+**Decision (Carlos, 2026-10-19): the generator gets the whole head; only the diffusion
+U-Net's copy of the condition is masked.**
+
+- The dataset returns the condition **unmasked**, as gan_bpm's `PairedNormalize` does (it
+  windows the whole frame and masks only the label, `mctp/transforms.py:302–319`).
+- `Network` multiplies the condition by `mask` (= envelope) where it enters the diffusion
+  U-Net: the two `denoise_fn` calls in `forward`, and the `y_cond` that `restoration` hands
+  to `p_sample`. The predictor gets the unmasked condition.
+- The predictor's output is already cut to `mask`: `y_initial = y_initial*mask`
+  (`models/network.py:98, 182`).
+- Inputs are only ever masked with the **envelope**, never `support`. `support` comes from
+  the label, so masking an input with it would show the model where the label's holes are
+  at test time.
+- This is fallback (a), but done inside `Network` with the mask it already has: no second
+  dataset key and no `Palette` change.
+- Each half sees what it was built for: gan_bpm the whole head, the diffusion U-Net the
+  paper's skull-stripped condition.
+
 ### 7.2 MRDPM cannot mark "brain voxel without a label"
 
 These voxels are the UCLA −1 fill and ISLES'24's −30 s background inside the envelope. MRDPM
@@ -208,6 +239,23 @@ during sampling.
 - `Network.forward` uses `loss_mask` in `L_diff` and `L_init`.
 - Noise, the U-Net input and the sampling paste keep using `mask`.
 - Without the key, the behaviour is today's, bit for bit.
+
+**Decision (Carlos, 2026-10-19): (c).** The training loss and every metric count only
+`support`. Whatever the model puts in a hole is ignored: a no-data hole has no right answer
+to learn or score. Both models are scored on the same voxels, defined by the label alone, so
+the paired comparison with gan_bpm stays fair. Two things to report or check:
+
+- **The holes are not random tissue.** About half of UCLA's sit in the parenchyma band, which
+  fits RAPID failing in tissue (gan_bpm `final_models_plan.md`, "UCLA v1 cross-check").
+  Scores over `support` say nothing about those voxels, so report the excluded fraction with
+  each score. Nobody has measured whether UCLA's holes overlap the lesion (ISLES 2018's
+  blanks: 2.4 % in the DWI lesion).
+- **Diffusion only.** gan_bpm's output at a hole affects nothing else. MRDPM's sampler feeds
+  each step's whole image, holes included, back in as the next input. The network can't see
+  where the holes are, so at sampling it treats them like similar tissue. In training,
+  though, the noisy input at a hole carries the clipped marker (a Tmax-0 target), which it
+  never sees at sampling. Probably small. Check after the first run: compare MRDPM's and
+  gan_bpm's errors on `support` voxels next to holes and far from them.
 
 ---
 
@@ -361,7 +409,7 @@ intermediate tensors. A check enforces that `y` is bitwise equal to `Generator.f
 | `data/dataset.py` | new class `MCTPDataset_mask` (§10.1). `NumpyDataset_mask` untouched | n/a, new class |
 | `data/__init__.py` | optional `which_val_dataset` (§9) | unchanged without it |
 | `models/gan_bpm_predictor.py` | new: the wrapper (§8.2–8.3) | n/a |
-| `models/network.py` | `Network(initial_predictor=...)` picks BRAN (default) or the wrapper; `init_weights` reloads the pretrained predictor (§8.4); `forward` takes `loss_mask` (§7.2) | BRAN, today's loss |
+| `models/network.py` | `Network(initial_predictor=...)` picks BRAN (default) or the wrapper; `init_weights` reloads the pretrained predictor (§8.4); `forward` takes `loss_mask` (§7.2); `forward` and `restoration` mask the condition at the U-Net input (§7.1) | BRAN, today's loss; the extra mask is a no-op when the dataset already masked the condition with a binary mask |
 | `models/model.py` | `set_input` reads `loss_mask` (falls back to `mask`) and passes it to `netG(...)` | unchanged |
 | `core/base_network.py` | skip the `tmax_net_G.pth` load unless the predictor is BRAN | unchanged for BRAN |
 | `config/ctp_only_f13_tmax_fold0.json` | new config (§11) | n/a |
@@ -384,12 +432,11 @@ scipy and torch, never `models`, so it is safe to append gan_bpm's root to `sys.
 - **`__getitem__`:**
   1. Load the raw input `(3, 512, 512)` HU and the raw label `(512, 512)` s.
   2. `envelope = brain_mask_from_input(raw)` (cached).
-  3. `cond = clip((raw − 10)/315, 0, 1) × envelope`
+  3. `cond = clip((raw − 10)/315, 0, 1)`, **not** masked (§7.1: `Network` masks the U-Net's
+     copy)
   4. `gt = clip(label, 0, 12)/12 × envelope`
   5. `loss_mask = envelope ∧ (label > −0.5)`
   6. Return MRDPM's dict (§4) plus `loss_mask`. `path = f"{case_id}_slice{idx:03d}.npy"`.
-- **Masked-condition switch.** One flag turns off the `× envelope` on the condition, in case
-  §7.1's fallback (a) is needed.
 
 ---
 
@@ -447,7 +494,7 @@ Every check gets a negative control, following gan_bpm's practice.
 
 - The cases in each part equal `split.json`'s. No case or patient is in two parts.
   - Negative control: a monitor case that is also in train is refused.
-- `2·cond − 1` equals gan_bpm's `PairedNormalize` image on real slices, inside the envelope
+- `2·cond − 1` equals gan_bpm's `PairedNormalize` image on real slices, over the whole frame
   (within float32 tolerance).
 - `gt` equals `(gan_bpm normed_label + 1)/2` inside the envelope wherever the label is valid.
 - `loss_mask` equals gan_bpm's `support` channel exactly.
@@ -457,6 +504,9 @@ Every check gets a negative control, following gan_bpm's practice.
 
 - The wrapper's `y` is bitwise equal to `Generator.forward` on the same input.
 - Feature shapes are `[(64, 256, 256), (128, 128, 128), (256, 64, 64)]` at 512.
+- The predictor gets the unmasked condition and the U-Net the masked one, in `forward` and
+  in `restoration`.
+  - Negative control: masking the predictor's input too changes `y_initial`.
 - After `define_network`, the predictor's weights equal the checkpoint's.
   - Negative control: without the reload in `init_weights`, they differ.
 - Refused checkpoints: 40 s ceiling, `n_phases != 3`, wrong target.
@@ -500,6 +550,8 @@ don't need UCLA data. The rest runs on the box. `Network.set_new_noise_schedule`
    `scripts/masked_input_check.py`. Its native arm goes through gan_bpm's own
    `build_dataloaders` and must reproduce the checkpoint's stored `val_L_pix_brain` (control
    tested on synthetic data: |diff| 3e-8; a re-initialized generator fails it).
+   **Done 2026-10-19:** native 1.433 s, masked 1.732 s (+21 %); the native arm reproduces
+   the stored 0.2388. Decision in §7.1.
 2. **Build** the dataset class, the wrapper, the `network.py` / `model.py` changes, the
    validation hook and the config, with the checks in §12.
 3. **Smoke on the box:**
@@ -530,9 +582,9 @@ don't need UCLA data. The rest runs on the box. `Network.set_new_noise_schedule`
 
 ## 15. Open (Carlos)
 
-- **§7.1 threshold:** how much masked-input degradation is acceptable before fallback (a) or
-  (b)?
-- **§7.2:** confirm option (c), `loss_mask`.
+- ~~§7.1 threshold~~ Decided 2026-10-19: masking costs +0.30 s, so the predictor gets the
+  whole head and only the U-Net's condition is masked (§7.1).
+- ~~§7.2~~ Decided 2026-10-19: (c), `loss_mask` = `support` for the loss and every metric.
 - **Fine-tune or freeze** the predictor. The proposal is the paper's fine-tune; freezing is a
   one-line switch.
 - **Epochs:** the paper's 200, with the hardcoded schedule, versus what fits on the box.
