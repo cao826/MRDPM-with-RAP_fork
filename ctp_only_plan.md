@@ -169,10 +169,17 @@ Both conversions are affine and exact in both directions. Nothing in MRDPM's ran
   and the frontal sinus sits on the midline, so `flip(dim=2)` swaps the two hemispheres.
 - **But the mirror is approximate.** The head is tilted by roughly 10° and sits off the frame's
   centre, so the mirrored brain lands a few millimetres off: the overlay's edges don't meet,
-  and a bright midline calcification shows as a red and a green dot side by side. MRDPM itself
-  only flips the array, with no alignment, so this is the method as published, applied to
-  unaligned scans. Aligning each slice's midline first would change gan_bpm's input, so not
-  now (§15).
+  and a bright midline calcification shows as a red and a green dot side by side.
+- **The paper aligned its images; we don't (verified, paper §3, correcting an earlier line
+  here).** Its preprocessing included *"adjusting images (cropping, rotation, translation) for
+  brain centralization"*, so its plain array flip mirrored roughly aligned hemispheres. The
+  released code has no alignment step only because it ships no preprocessing.
+- **Where the flip is in our model:** not in BRAN. It is in the diffusion U-Net's asymmetry
+  module, `cond_resample.forward` (`models/guided_diffusion_modules/unet.py:332`), which mirrors
+  the initial predictor's feature maps `hs` (H/2, H/4, H/8) before fusing them. With BRAN
+  replaced, `hs` are gan_bpm's decoder features, so the U-Net mirrors those.
+- gan_bpm trains with no augmentation at all (`mctp/transforms.py:build_transforms`), so its
+  generator has only seen scans as stored. Options in §15.
 
 ---
 
@@ -642,7 +649,16 @@ a perfectly round head).
 - **EMA at test:** the code validates and tests with `netG`, not the EMA copy. The paper says
   EMA "was employed" without saying where.
 - **Monitor subset size** and `val_epoch`, once seconds per step are known.
-- **Midline alignment for the asymmetry prior** (§6): the scans are tilted and off-centre, so
-  the mirror is a few millimetres off. Low priority: it is how MRDPM works as published.
+- **Alignment for the asymmetry prior** (§6). The paper rotated and centred its images; ours
+  are tilted and off-centre, so the flip mirrors misaligned hemispheres. In the paper's
+  ablation (Table 2) the asymmetry module is worth MAE 0.049 → 0.047. Options:
+  - (a) leave it, and report it as a deviation from the paper's preprocessing;
+  - (b) rotate and centre each case in the data loader, as the paper did. gan_bpm's generator
+    then sees inputs it was never trained on (re-check it as in §7.1), and the comparison with
+    gan_bpm needs one common space;
+  - (c) keep every input as stored and replace the array flip in `cond_resample` with a
+    reflection across each case's estimated midline (a per-sample `grid_sample`). One model
+    edit; gan_bpm's input and the scoring space are unchanged.
+  - (b) and (c) both need a midline estimate per case.
 - **After Tmax:** rCBF (same mapping, §5). A BRAN baseline from scratch on 3 channels
   (`Encoderv1x(in_channels=3)`) is an optional ablation.
