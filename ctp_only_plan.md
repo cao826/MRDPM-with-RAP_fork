@@ -1,8 +1,8 @@
 # ctp-only plan: MRDPM on f13 CTP phases, with gan_bpm's generator as the initial predictor
 
-**Status (2026-10-19): steps 0 and 1 (§13) are done, the input path (§7.1) and the loss mask
-(§7.2) are decided, and step 2 is built and passes its synthetic checks. Next: the checks on the
-real data (§12), then the GPU smoke run.** Branch `ctp-only`. This doc collects what
+**Status (2026-10-19): steps 0–2 (§13) are done: the input path (§7.1) and the loss mask (§7.2)
+are decided, and the build passes every check, synthetic and on the real data (§12). The
+orientation is right (§6). Next: the GPU smoke run, step 3, built as `condor/ctp_only_smoke.sub`.** Branch `ctp-only`. This doc collects what
 was read and decided in conversation so far. Items marked **(verified)** were checked against
 code or data; items marked **(proposal)** wait for Carlos's agreement.
 
@@ -164,7 +164,15 @@ Both conversions are affine and exact in both directions. Nothing in MRDPM's ran
 - **Box check (2026-10-19, §12 cpu part):** over 792 held-out slices, the envelope's median
   dice with its mirror, re-centred, is 0.967 across axis 0 (MRDPM's flip) and 0.945 across
   axis 1. Axis 0 wins, but by little: a head outline is nearly symmetric both ways.
-- **To do before training:** look at `orientation.png` (§12) by eye.
+- **`orientation.png`, by eye (2026-10-19): the axis is right.** On the slice with the most
+  brain (`dYoSKe7gFe_slice001`), the head's long, front-to-back axis runs along the columns
+  and the frontal sinus sits on the midline, so `flip(dim=2)` swaps the two hemispheres.
+- **But the mirror is approximate.** The head is tilted by roughly 10° and sits off the frame's
+  centre, so the mirrored brain lands a few millimetres off: the overlay's edges don't meet,
+  and a bright midline calcification shows as a red and a green dot side by side. MRDPM itself
+  only flips the array, with no alignment, so this is the method as published, applied to
+  unaligned scans. Aligning each slice's midline first would change gan_bpm's input, so not
+  now (§15).
 
 ---
 
@@ -579,11 +587,17 @@ a perfectly round head).
 2. **Build** the dataset class, the wrapper, the `network.py` / `model.py` changes, the
    validation hook and the config, with the checks in §12. **Built 2026-10-19** (§10, §11).
    The synthetic checks pass on the laptop; the real-data checks are next.
-3. **Smoke on the box's GPU** (a Condor job):
+3. **Smoke on the box's GPU** (a Condor job). **Built 2026-10-19:** `condor/ctp_only_smoke.sub`.
    - `python run.py -p train -d` with the new config: one epoch on 2 slices, one monitor pass
      on 2 slices;
-   - then `-p test -d` on 2 slices with `resume_state` set;
-   - measure seconds per sampling step and the memory at batch 1 (§14).
+   - then `-p test -d` on 2 slices with `resume_state` set (the job writes a copy of the
+     config with it, since `run.py` has no flag);
+   - then `scripts/ctp_only_gpu_probe.py`: peak memory and seconds per step for a training
+     step at batch 1, 2, 4, 8 and a sampling step at 1, 4, 8, 16, with what each costs per
+     epoch, monitor pass and test pass (§14).
+   - The job refuses to start when its container sees more than one GPU: `run.py` sets
+     `CUDA_VISIBLE_DEVICES` to the config's `gpu_ids` ("0"), which is only this job's card
+     when it is the only one.
 4. **The first real run:** fold 0, Tmax.
 5. **Score against gan_bpm fold 0** on the held-out fold, in seconds, over `support`.
    - Proposal: write MRDPM's `Out_` maps as gan_bpm's external-maps `.npz`
@@ -628,5 +642,7 @@ a perfectly round head).
 - **EMA at test:** the code validates and tests with `netG`, not the EMA copy. The paper says
   EMA "was employed" without saying where.
 - **Monitor subset size** and `val_epoch`, once seconds per step are known.
+- **Midline alignment for the asymmetry prior** (§6): the scans are tilted and off-centre, so
+  the mirror is a few millimetres off. Low priority: it is how MRDPM works as published.
 - **After Tmax:** rCBF (same mapping, §5). A BRAN baseline from scratch on 3 channels
   (`Encoderv1x(in_channels=3)`) is an optional ablation.
