@@ -642,6 +642,16 @@ a perfectly round head).
      one exists, since it may still be being written; at the end everything goes.
    - Condor brings back only a summary file, so the workspace's data never lands in `condor/`.
    - Submit `debug` first (1 epoch on 4 slices, a monitor pass on 2), then `full`.
+   - **Debug run passed 2026-10-19** (H100): 13.3 GB copied in 160 s (83 MB/s); 1 training
+     step; monitor pass on 2 slices in 68 s; health files and checkpoint 1 moved to
+     `/radraid2/colivares/mrdpm_ctp_only/runs/debug_ctp_only_f13_tmax_fold0_261019_200645/`.
+     After one step MRDPM's monitor error is 11.4 s against the predictor's 1.45 s on the same
+     slices: an untrained U-Net (its last layer starts at zero) samples noise. That gap is the
+     curve to watch.
+   - **GPU memory:** the first epoch peaked at 90 GiB, against the probe's 47 GiB at batch 4.
+     The config's `seed: -1` (upstream's) makes `core/util.py:set_seed` turn on cuDNN
+     benchmarking, which tries convolution algorithms with large workspaces on the first step.
+     The probe ran without it. Later epochs' peaks are in `train.csv`.
 5. **Score against gan_bpm fold 0** on the held-out fold, in seconds, over `support`.
    - Proposal: write MRDPM's `Out_` maps as gan_bpm's external-maps `.npz`
      (`pred_norm = 2·out − 1`), so gan_bpm's evaluation code scores both models the same way.
