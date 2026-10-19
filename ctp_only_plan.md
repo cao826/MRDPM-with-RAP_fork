@@ -3,7 +3,8 @@
 **Status (2026-10-19): steps 0–2 (§13) are done: the input path (§7.1) and the loss mask (§7.2)
 are decided, and the build passes every check, synthetic and on the real data (§12). The
 orientation is right (§6), but the scans aren't aligned, so the asymmetry flip is off (§6). Step 3,
-the GPU smoke run, passed (§13, §14). Next: size the first real run.** Decisions, dated, are listed
+the GPU smoke run, passed (§13, §14). Step 4, fold 0 on the H100 box, is built
+(`condor/ctp_only_train_h100.sub`, with the health log of §16): a debug submission first.** Decisions, dated, are listed
 in `ctp_only_decisions.md`. Branch `ctp-only`. This doc collects what
 was read and decided in conversation so far. Items marked **(verified)** were checked against
 code or data; items marked **(proposal)** wait for Carlos's agreement.
@@ -440,6 +441,9 @@ intermediate tensors. A check enforces that `y` is bitwise equal to `Generator.f
 | `core/logger.py` | `LogTracker.reset` no longer writes through `.values` (below) | same values |
 | `models/guided_diffusion_modules/unet.py` | `UNet(mirror_hs=...)` → `cond_resample(mirror=...)`: when off, the asymmetry module pairs the predictor's features with themselves instead of their flip (§6). Same layers and shapes | the flip, as upstream |
 | `config/ctp_only_f13_tmax_fold0.json` | new config (§11) | n/a |
+| `models/health.py` | new: the training-health log (§16) | n/a, used only with `health_log` |
+| `models/model.py`, again | `health_log` hooks in `train_step` / `val_step`; a resumed run continues the LR schedule (§16) | unchanged, except that a resumed run's LR is now right |
+| `models/network.py`, again | the `loss_mask` branch keeps its two terms in `self.loss_terms` | unchanged |
 
 **Untouched:** the diffusion maths, the training loop, EMA, checkpointing and `run.py`.
 
@@ -483,6 +487,10 @@ What differs from `config/npy_1000linear_-6_-2_b4_nc64.json`:
   slices.
 - **Network:** `initial_predictor` = gan_bpm's fold-0 `best.pt` with `expect_fold: 0`;
   `mask_unet_cond: true`; `unet.in_channel` 4, `image_size` 512 and `mirror_hs: false` (§6).
+- **The recipe (decided 2026-10-19, `ctp_only_decisions.md` #11–#12):** train batch 4 (the
+  paper's; needs the H100), monitor 16 slices at batch 16 every 10 epochs, test at batch 16,
+  `health_log` on (§16). The debug cut is 4 training slices, one whole batch, because the train
+  loader drops an incomplete batch.
 - **Output:** `path.base_dir` = `/radraid2/colivares/mrdpm_ctp_only/experiments`, not the repo.
 - **Batch:** train 1 (to measure, §14). Monitor and test 4: sampling only, no gradients.
 - **`save_checkpoint_epoch` 10, not 1:** each save is 1.1 GB (§14).
@@ -618,7 +626,19 @@ a perfectly round head).
      the job ships a bundle: a `git archive` of this repo, 32 training slices, the fold-0
      checkpoint and gan_bpm's `generator.py` (`ctp_only_gpu_probe.py --make-bundle`). A real
      run there would also need the data on that machine.
-4. **The first real run:** fold 0, Tmax.
+4. **The first real run:** fold 0, Tmax, on the H100 box. **Built 2026-10-19:**
+   `condor/ctp_only_train_h100.sub` (arguments: fold, `debug` or `full`, an optional resume
+   checkpoint).
+   - The job copies the staged dataset and gan_bpm's code from
+     `/radraid2/colivares/mrdpm_ctp_only/stage/`, plus the fold's `split.json` and `best.pt`,
+     into its workspace. The cluster's rule: never run on data in `/radraid*`.
+   - It writes a copy of the config pointing at those copies and at the fold, and trains there.
+   - Every 10 minutes it moves finished checkpoints to
+     `/radraid2/colivares/mrdpm_ctp_only/runs/<experiment>/` and copies the rest (health files,
+     monitor maps, `train.log`, run.py's output). The newest checkpoint set stays until a newer
+     one exists, since it may still be being written; at the end everything goes.
+   - Condor brings back only a summary file, so the workspace's data never lands in `condor/`.
+   - Submit `debug` first (1 epoch on 4 slices, a monitor pass on 2), then `full`.
 5. **Score against gan_bpm fold 0** on the held-out fold, in seconds, over `support`.
    - Proposal: write MRDPM's `Out_` maps as gan_bpm's external-maps `.npz`
      (`pred_norm = 2·out − 1`), so gan_bpm's evaluation code scores both models the same way.
@@ -712,12 +732,15 @@ a perfectly round head).
 - ~~§7.1 threshold~~ Decided 2026-10-19: masking costs +0.30 s, so the predictor gets the
   whole head and only the U-Net's condition is masked (§7.1).
 - ~~§7.2~~ Decided 2026-10-19: (c), `loss_mask` = `support` for the loss and every metric.
-- **Fine-tune or freeze** the predictor. The proposal is the paper's fine-tune; freezing is a
-  one-line switch.
-- **Epochs:** the paper's 200, with the hardcoded schedule, versus what fits on the box.
+- ~~**Fine-tune or freeze**~~ Decided 2026-10-19: fine-tune jointly, as the paper (decisions #11).
+- ~~**Epochs**~~ Decided 2026-10-19: the paper's 200 with its schedule (decisions #11).
 - **EMA at test:** the code validates and tests with `netG`, not the EMA copy. The paper says
   EMA "was employed" without saying where.
-- **Monitor subset size** and `val_epoch`, once seconds per step are known.
+- ~~**Monitor subset size** and `val_epoch`~~ Decided 2026-10-19: 16 slices every 10 epochs
+  (decisions #12).
+- **Validity (§17):** repeat the masking check and the orientation look on training cases, so
+  fold 0's held-out cases informed no decision. Freeze the evaluation before any held-out fold
+  is scored (decisions #15).
 - ~~**Alignment for the asymmetry prior**~~ Decided 2026-10-19: no flip (`mirror_hs: false`,
   §6). The options below are what it would take to turn it back on.
   The paper rotated and centred its images; ours are tilted and off-centre, so the flip mirrors
@@ -733,3 +756,55 @@ a perfectly round head).
   - (b) and (c) both need a midline estimate per case.
 - **After Tmax:** rCBF (same mapping, §5). A BRAN baseline from scratch on 3 channels
   (`Encoderv1x(in_channels=3)`) is an optional ablation.
+
+---
+
+## 16. Training health log (built 2026-10-19)
+
+MRDPM itself logs one combined loss every `log_iter` samples and, at each monitor pass, a `mae`
+over the whole image (background included, so it says little). With `health_log` in Palette's
+config, `models/health.py` adds, under `{experiment}/health/`:
+
+- **`train.csv`, per epoch:** the loss and its two terms (the diffusion noise MSE and the
+  predictor's L1 against the label, both over `loss_mask`); the learning rate and the
+  schedule's position (`lr_epoch`); the gradient norm, mean and max over the epoch's steps;
+  non-finite steps; seconds; slices per second; peak GPU memory.
+- **`monitor.csv`, per monitor pass:** the pooled error over `loss_mask` in seconds, for
+  MRDPM's output and for the predictor alone on the same slices. That shows whether diffusion
+  improves on the starting map and whether fine-tuning degrades the predictor. Also the
+  fraction of the envelope that `loss_mask` covers.
+- **`monitor_eNNN.png`:** label, predictor, MRDPM and both error maps for 4 slices.
+
+It only reads: `scripts/ctp_only_checks.py` checks that the loss and the gradients are the same
+with it, and that the loss equals its two logged terms exactly.
+
+`scripts/plot_health.py <experiment dir>` turns the CSVs into `health/curves.png`, at any point
+during the run.
+
+**Also fixed: a resumed run restarted the LR schedule.** Palette's `LambdaLR` isn't in
+`self.schedulers`, so it was never saved. A run resumed at epoch E restarted it at 0: constant
+LR until epoch E + 100, then the decay. `Palette.__init__` now sets it to the resumed epoch.
+Checked end to end: a run resumed from checkpoint 1 trains epoch 2 with the schedule at
+epoch 1 (`lr_epoch` in `train.csv`).
+
+## 17. Validity (discussed 2026-10-19)
+
+- **Cross-validation:** gan_bpm's 5 folds, split by patient; MRDPM fold k uses gan_bpm's fold-k
+  generator, which trained only on fold k's training cases. Every case is tested once, by models
+  that never trained on it. The cross-validation result needs all 5 folds.
+- **ISLES:** ISLES'24 is inside the cross-validation data. ISLES 2018 is gan_bpm's external
+  set: no model trains on it, it is scored once after every model exists, and nothing changes
+  because of it.
+- **Clean by construction:** patient-level splits; the held-out fold chooses nothing for MRDPM
+  (fixed schedule, last epoch, monitor from training patients); fixed scaling constants; both
+  models scored on the same voxels.
+- **Two weak spots:**
+  1. gan_bpm chose each fold's `best.pt` on that fold's held-out cases, the ones MRDPM is tested
+     on. It favours gan_bpm's own scores equally, so the paired difference stays fair; absolute
+     numbers are slightly optimistic for both. Proposal: disclose.
+  2. The masking check (§7.1) scored gan_bpm's generator on fold 0's held-out cases, and the
+     no-flip decision (§6) came from one held-out input image (no labels, no predictions).
+     Proposal: repeat both on training cases.
+- **The rule from here:** freeze the evaluation (metrics, one number per patient, the paired
+  comparison) before any held-out fold is scored; change nothing because of test results.
+

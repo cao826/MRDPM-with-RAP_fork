@@ -13,8 +13,11 @@ real data. scripts/ctp_only_box_checks.py covers what needs the real data and ch
 """
 import argparse
 import copy
+import csv
 import hashlib
+import importlib.util
 import json
+import math
 import os
 import sys
 import tempfile
@@ -131,6 +134,10 @@ def network_opt(cfg, gan_bpm, ckpt):
     opt["args"]["initial_predictor"].update(gan_bpm_root=str(gan_bpm), checkpoint=str(ckpt))
     opt["args"]["unet"]["image_size"] = H
     return opt
+
+
+def read_csv(path):
+    return list(csv.DictReader(path.open())) if path.is_file() else []
 
 
 def batch_of(dataset, n=2):
@@ -353,7 +360,10 @@ def check_network(parts, ckpts, gan_bpm, cfg):
     net.initial_net.register_forward_pre_hook(lambda m, a: seen["pred"].append(a[0].clone()))
     net.denoise_fn.register_forward_pre_hook(lambda m, a: seen["unet"].append(a[0].clone()))
     with torch.no_grad():
-        net(gt, cond, mask=mask, loss_mask=lm)
+        total = net(gt, cond, mask=mask, loss_mask=lm)
+        terms = net.loss_terms
+        check("forward keeps the loss's two terms for the health log; the loss is exactly diff + 0.1 × init",
+              torch.equal(total, terms["loss_diff"] + terms["loss_init"] * 0.1))
         check("forward: the predictor reads the whole condition", torch.equal(seen["pred"][-1], cond))
         check("forward: the U-Net reads condition × mask", torch.equal(seen["unet"][-1][:, :3], cond * mask))
         check("  negative control: on this batch the two differ", not torch.equal(cond, cond * mask))
@@ -415,6 +425,21 @@ def check_network(parts, ckpts, gan_bpm, cfg):
     grad = lambda m: sum(float(p.grad.abs().sum()) for p in m.parameters() if p.grad is not None)
     check("one training step: finite loss, gradients reach the predictor and the U-Net",
           bool(torch.isfinite(loss_value)) and grad(net.initial_net) > 0 and grad(net.denoise_fn) > 0)
+
+    from models.health import HealthLog
+    grads = {n: q.grad.clone() for n, q in net.named_parameters() if q.grad is not None}
+    before = loss_value.detach().clone()
+    with tempfile.TemporaryDirectory() as d:
+        health = HealthLog(d, label_scale=12.0, unit="s")
+        health.start_epoch()
+        health.step(net, loss_value, len(gt))
+        health.end_epoch(1, len(gt), 5e-5, 0)
+        row = next(csv.DictReader((Path(d) / "health/train.csv").open()))
+    check("health log: reading the loss and the gradients changes neither",
+          torch.equal(loss_value.detach(), before)
+          and all(torch.equal(q.grad, grads[n]) for n, q in net.named_parameters() if q.grad is not None))
+    check("  its row has both loss terms and a positive, finite gradient norm",
+          all(math.isfinite(float(row[k])) for k in ("loss_diff", "loss_init")) and 0 < float(row["grad_norm_max"]) < math.inf)
 
 
 def check_mirror(parts, ckpts, gan_bpm, cfg):
@@ -481,6 +506,11 @@ def check_config(cfg):
     check("mask_unet_cond is on", a["mask_unet_cond"] is True)
     bs = cfg["datasets"]["train"]["dataloader"]["args"]["batch_size"]
     check("log_iter is a multiple of the batch size (iter counts samples)", cfg["train"]["log_iter"] % bs == 0)
+    check("the debug cut is whole batches: the train loader drops an incomplete one",
+          cfg["debug"]["debug_split"] % bs == 0 and cfg["datasets"]["train"]["dataloader"]["args"]["drop_last"])
+    hl = cfg["model"]["which_model"]["args"].get("health_log") or {}
+    check("health log on, errors in seconds (label_scale = tmax_ceiling)",
+          hl.get("label_scale") == tr["tmax_ceiling"] and hl.get("unit") == "s")
 
 
 def check_run_py(cfg, root, split, ckpts, state, gan_bpm, work):
@@ -536,10 +566,39 @@ def check_run_py(cfg, root, split, ckpts, state, gan_bpm, work):
                                      for o, m in zip(outs, masks)))
         log = (exp / "train.log").read_text()
         check("train.log names the predictor's checkpoint", "Initial predictor loaded from" in log and str(ckpts["good"]) in log)
+        rows = read_csv(exp / "health/train.csv")
+        check("health: train.csv has epoch 1 with the loss terms, gradient norm and LR, all finite",
+              len(rows) == 1 and rows[0]["epoch"] == "1" and rows[0]["steps"] == "1" and all(
+                  math.isfinite(float(rows[0][k])) for k in ("loss", "loss_diff", "loss_init", "grad_norm_max", "lr")),
+              str(rows[0] if rows else None)[:120])
+        mon = read_csv(exp / "health/monitor.csv")
+        check("health: monitor.csv has the epoch-1 pass, errors in seconds for MRDPM and the predictor alone",
+              len(mon) == 1 and mon[0]["slices"] == "2" and all(
+                  math.isfinite(float(mon[0][k])) for k in ("mae_output_s", "mae_predictor_s", "support_of_envelope")),
+              str(mon[0] if mon else None)[:120])
+        check("health: the monitor panel", (exp / "health/monitor_e001.png").is_file()
+              or importlib.util.find_spec("matplotlib") is None)
         saved = torch.load(ck / "1_Network.pth", map_location="cpu")
         pred = {k[len("initial_net.G."):]: v for k, v in saved.items() if k.startswith("initial_net.G.")}
         check("train: the predictor was fine-tuned, its weights moved",
               pred.keys() == state.keys() and not all(torch.equal(pred[k], state[k]) for k in state))
+
+        # Resume from checkpoint 1 for one more epoch: the LR schedule must continue from epoch 1.
+        resumed = copy.deepcopy(c)
+        resumed["path"]["resume_state"] = str(ck / "1")
+        resumed["debug"]["n_epoch"] = 1
+        resume_cfg = work / "run/resume.json"
+        resume_cfg.write_text(json.dumps(resumed, indent=1))
+        args = ap.Namespace(config=str(resume_cfg), phase="train", batch=None, gpu_ids=None, debug=True, port="21012")
+        opt = Praser.parse(args)
+        opt["world_size"] = 1
+        run.main_worker(0, 1, opt)
+        rexp = Path(opt["path"]["experiments_root"])
+        rrows = read_csv(rexp / "health/train.csv")
+        check("resume: epoch 2 trains from checkpoint 1 with the LR schedule at epoch 1, not restarted at 0",
+              rexp != exp and (rexp / "checkpoint/2_Network.pth").is_file()
+              and len(rrows) == 1 and rrows[0]["epoch"] == "2" and rrows[0]["lr_epoch"] == "1",
+              str({k: rrows[0][k] for k in ("epoch", "lr", "lr_epoch")} if rrows else None))
 
         test_cfg = work / "run/test.json"
         c["path"]["resume_state"] = str(ck / "1")

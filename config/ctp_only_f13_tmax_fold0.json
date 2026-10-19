@@ -1,6 +1,8 @@
 {
     // ctp_only_plan.md §11: MRDPM on f13's 3 CTP phases -> Tmax, fold 0 of gan_bpm's k=5 split,
-    // with gan_bpm's fold-0 generator as the initial predictor. Paths are the GPU box's.
+    // with gan_bpm's fold-0 generator as the initial predictor. Paths are 14958's; the H100 job
+    // (condor/ctp_only_train_h100.sh) rewrites them to its workspace copies and sets the fold.
+    // Batch 4 needs the H100 (47 GiB peak); the RTX 8000 fits 2 (ctp_only_decisions.md #11).
     "name": "ctp_only_f13_tmax_fold0",
     "gpu_ids": [0],
     "seed" : -1,
@@ -38,20 +40,20 @@
                     "label_type": "tmax",
                     "tmax_ceiling": 12.0,
                     "monitor_cases_per_dataset": 1, // must match what "train" uses (the default)
-                    "monitor_max_slices": 32
+                    "monitor_max_slices": 16 // one batch on the H100, every val_epoch (decisions #12)
                 }
             },
             "dataloader":{
                 "validation_split": 0, // unused: which_val_dataset replaces it
                 "args":{
-                    "batch_size": 1, // to measure at 512 (§14)
+                    "batch_size": 4, // the paper's batch size (decisions #11)
                     "num_workers": 8,
                     "shuffle": true,
                     "pin_memory": true,
                     "drop_last": true
                 },
                 "val_args":{
-                    "batch_size": 4,
+                    "batch_size": 16, // sampling only: 39.7 GiB on the H100
                     "num_workers": 4,
                     "shuffle": false,
                     "pin_memory": true,
@@ -73,7 +75,7 @@
             },
             "dataloader":{
                 "args":{
-                    "batch_size": 4,
+                    "batch_size": 16, // sampling only
                     "num_workers": 4,
                     "pin_memory": true
                 }
@@ -94,7 +96,12 @@
                 },
                 "optimizers": [
                     { "lr": 5e-5, "weight_decay": 0}
-                ]
+                ],
+                "health_log": { // models/health.py; label_scale = tmax_ceiling, so errors are in seconds
+                    "label_scale": 12.0,
+                    "unit": "s",
+                    "panels": 4
+                }
             }
         },
         "which_networks": [
@@ -166,12 +173,12 @@
         "tensorboard" : false
     },
 
-    "debug": { // run.py -d: one epoch on 2 training slices, then a monitor pass on 2 slices
+    "debug": { // run.py -d: one epoch on 4 training slices (one batch), then a monitor pass on 2 slices
         "n_epoch": 0, // the loop runs while epoch <= n_epoch, so 0 is one epoch
         "val_epoch": 1,
         "save_checkpoint_epoch": 1,
         "log_iter": 1,
-        "debug_split": 2,
+        "debug_split": 4, // a whole batch: the train loader drops an incomplete one
         "debug_val_split": 2
     }
 }

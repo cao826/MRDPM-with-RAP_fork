@@ -210,7 +210,10 @@ class Network(BaseNetwork):
                 loss = self.loss_fn(mask*noise, mask*noise_hat) + self.loss_initial(y_0, y_initial)*0.1
             else:
                 # ctp_only_plan.md §7.2: no-data voxels keep their noise and U-Net input but leave the loss
-                loss = self.loss_fn(loss_mask*noise, loss_mask*noise_hat) + self.loss_initial(loss_mask*y_0, loss_mask*y_initial)*0.1
+                loss_diff = self.loss_fn(loss_mask*noise, loss_mask*noise_hat)
+                loss_init = self.loss_initial(loss_mask*y_0, loss_mask*y_initial)
+                self.loss_terms = {'loss_diff': loss_diff.detach(), 'loss_init': loss_init.detach()}  # for models/health.py
+                loss = loss_diff + loss_init*0.1
         else:
             noise_hat = self.denoise_fn(torch.cat([y_cond, y_noisy], dim=1), sample_gammas, init_cond)
             loss = self.loss_fn(noise, noise_hat) + self.loss_initial(y_0, y_initial)*0.1

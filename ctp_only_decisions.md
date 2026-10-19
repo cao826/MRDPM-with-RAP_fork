@@ -122,15 +122,65 @@ The reasoning, measurements and code details live in `ctp_only_plan.md` (the § 
   `config/ctp_only_f13_tmax_fold0.json`.
 - **Status:** decided (Carlos). Plan §6, §15.
 
+### 11. 2026-10-19 · The training recipe for fold 0, on the H100 box
+
+- **Decision:**
+  - Batch 4, learning rate 5e-5, 200 epochs with the paper's schedule (constant to epoch 100,
+    then linear to 0 at 200), EMA 0.9999.
+  - The predictor is fine-tuned jointly, λ = 0.1, as in the paper.
+  - Train on the H100 NVL box (REDLRADADM35838): about 4× the RTX 8000, about 20 h per fold.
+- **Why batch 4, not 6:**
+  - Batch 4 is the paper's.
+  - Batch 6 is no faster per epoch (17.0 h vs 17.2 h): the card is already fully busy.
+  - It would cut the number of updates by a third at the same learning rate.
+  - The memory left over can't be used by another job, since the job holds the whole card
+    either way.
+- **Status:** decided (Carlos). Plan §11, §14.
+
+### 12. 2026-10-19 · Monitor: 16 slices every 10 epochs
+
+- **Decision:** 16 slices (one batch on the H100) from the 3 monitor patients, sampled every
+  10 epochs: 20 points on the curve, about 2.4 h of the run.
+- **Why:** it watches training, it never selects an epoch. The same slices are sampled every
+  time, so the trend is steady. Its real limit is the 3 patients, not the slice count.
+- **Alternatives:** 8 slices every 20 epochs (Carlos found it underpowered); 32 every 10
+  (about 5 h).
+- **Status:** decided (Carlos). Plan §11.
+
+### 13. 2026-10-19 · Data reach the H100 box through `/radraid2`
+
+- **Decision:** a one-time copy of the dataset and gan_bpm's code from 14958's `/raid` to
+  `/radraid2/colivares/mrdpm_ctp_only/stage/` (`rsync -aL`, because the combined root is
+  symlinks). Each job copies them into its workspace, trains there, and moves its results back
+  to `/radraid2/colivares/mrdpm_ctp_only/runs/`.
+- **Why:** the H100 box takes no logins. The cluster's rule (Carlos's knowledge doc) is to never
+  run on data in `/radraid*`, but to copy in at the start and move results back at the end.
+- **Status:** decided (Carlos). Plan §13 step 4, §14.
+
+### 14. 2026-10-19 · Training-health log, and the LR schedule on resume
+
+- **Decision:** `models/health.py`, switched on by `health_log` in the config, writes per-epoch
+  and per-monitor-pass CSVs and a PNG per monitor pass. `scripts/plot_health.py` plots them.
+  A resumed run now continues the LR schedule instead of restarting it.
+- **Why:** MRDPM alone logs one combined loss and a whole-image MAE, which says little.
+- **Status:** decided (Carlos). Plan §16.
+
+### 15. 2026-10-19 · Freeze the evaluation before scoring any held-out fold
+
+- **Decision:** training can start now. No held-out fold is scored until the evaluation plan
+  (metrics, one number per patient, the paired comparison with gan_bpm) is written down. Nothing
+  changes because of what a held-out fold shows.
+- **Status:** decided (Carlos). Plan §17.
+
 ---
 
 ## Open
 
 The current setting is in brackets.
 
-- **Fine-tune or freeze the predictor** [fine-tuned jointly, λ = 0.1, as in the paper].
-- **Epochs** [the paper's 200, with the hardcoded LR schedule]. Revisit with the step-3 timing.
-- **Batch size, monitor size, `val_epoch`** [train 1, monitor 32 slices every 10 epochs].
-  Waiting for the step-3 probe.
+- **The evaluation plan** (#15), to freeze before scoring.
+- **Validity checks on training cases** (plan §17): repeat the masking check and the
+  orientation look on training cases [not done].
+- **gan_bpm's `best.pt` was chosen on the held-out fold** (plan §17) [proposal: disclose].
 - **EMA at test** [the code validates and tests with `netG`, not the EMA copy].
 - **After Tmax:** rCBF. An optional ablation: BRAN from scratch on 3 channels.

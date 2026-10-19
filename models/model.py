@@ -3,6 +3,7 @@ import tqdm
 from core.base_model import BaseModel
 from core.logger import LogTracker
 import copy
+from models.health import HealthLog
 
 class EMA():
     def __init__(self, beta=0.9999):
@@ -18,7 +19,7 @@ class EMA():
         return old * self.beta + (1 - self.beta) * new
 
 class Palette(BaseModel):
-    def __init__(self, networks, losses, sample_num, task, optimizers, ema_scheduler=None, **kwargs):
+    def __init__(self, networks, losses, sample_num, task, optimizers, ema_scheduler=None, health_log=None, **kwargs):
         ''' must to init BaseModel with kwargs '''
         super(Palette, self).__init__(**kwargs)
 
@@ -43,6 +44,11 @@ class Palette(BaseModel):
         lambda1 = lambda epoch: 1 if epoch < 100 else 1 - (epoch - 100) / (200 - 100)
         self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optG, lr_lambda=lambda1)
         self.resume_training() 
+        # The LR schedule isn't in self.schedulers, so it isn't saved and a resumed run would restart
+        # it at epoch 0. Continue it from the resumed epoch instead.
+        if self.epoch > 0:
+            self.lr_scheduler.last_epoch = self.epoch - 1
+            self.lr_scheduler.step()
 
         if self.opt['distributed']:
             self.netG.module.set_loss(self.loss_fn)
@@ -58,6 +64,10 @@ class Palette(BaseModel):
 
         self.sample_num = sample_num
         self.task = task
+        # ctp_only_plan.md §16: per-epoch and per-monitor-pass health files, rank 0 only
+        self.health = None
+        if health_log is not None and self.opt['global_rank'] == 0:
+            self.health = HealthLog(self.opt['path']['experiments_root'], **health_log)
         
     def set_input(self, data):
         ''' must use set_device in tensor '''
@@ -110,11 +120,15 @@ class Palette(BaseModel):
     def train_step(self):
         self.netG.train()
         self.train_metrics.reset()
+        if self.health is not None:
+            self.health.start_epoch()
         for train_data in tqdm.tqdm(self.phase_loader):
             self.set_input(train_data)
             self.optG.zero_grad()
             loss = self.netG(self.gt_image, self.cond_image, mask=self.mask, loss_mask=self.loss_mask)
             loss.backward()
+            if self.health is not None:
+                self.health.step(self.netG, loss, self.batch_size)
             self.optG.step()
 
             self.iter += self.batch_size
@@ -129,6 +143,8 @@ class Palette(BaseModel):
             if self.ema_scheduler is not None:
                 if self.iter > self.ema_scheduler['ema_start'] and self.iter % self.ema_scheduler['ema_iter'] == 0:
                     self.EMA.update_model_average(self.netG_EMA, self.netG)
+        if self.health is not None:
+            self.health.end_epoch(self.epoch, self.iter, self.optG.param_groups[0]['lr'], self.lr_scheduler.last_epoch)
         self.lr_scheduler.step()
         print(self.lr_scheduler.get_last_lr())
 
@@ -137,6 +153,8 @@ class Palette(BaseModel):
     def val_step(self):
         self.netG.eval()
         self.val_metrics.reset()
+        if self.health is not None:
+            self.health.start_monitor()
         with torch.no_grad():
             for val_data in tqdm.tqdm(self.val_loader):
                 self.set_input(val_data)
@@ -150,6 +168,8 @@ class Palette(BaseModel):
                         self.output, self.visuals = self.netG.restoration(self.cond_image, y_t=self.cond_image, 
                             y_0=self.gt_image, mask=self.mask, sample_num=self.sample_num,target=self.gt_image)
   
+                if self.health is not None:
+                    self.health.monitor_batch(self.netG, self.cond_image, self.gt_image, self.mask, self.loss_mask, self.output)
                 self.iter += self.batch_size
                 self.writer.set_iter(self.epoch, self.iter, phase='val')
 
@@ -162,6 +182,8 @@ class Palette(BaseModel):
                     self.writer.add_images(key, value)
                 self.writer.save_images(self.save_current_results())
 
+        if self.health is not None:
+            self.health.end_monitor(self.epoch)
         return self.val_metrics.result()
 
     def test(self):
