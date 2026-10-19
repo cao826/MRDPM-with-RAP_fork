@@ -1,0 +1,26 @@
+# Step 0 of ctp_only_plan.md §13: what does the box already have? CPU only, ~30 s, trains nothing.
+#
+#   cd condor && mkdir -p log && condor_submit probe_box.sub
+#   cat log/probe_box.<cluster>.0.out      # paste this back
+#
+# Same image as gan_bpm's jobs, so the import results are the ones a real MRDPM job would see.
+universe                = docker
+docker_image            = registry.cvib.ucla.edu/colivares:pytorch-env-v2
+
+executable              = probe_box.sh
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT
+
+# /raid and /radraid2 are per-machine; the checkpoint, split and data all live on 14958's.
+requirements            = (Machine == "REDLRADADM14958.ad.medctr.ucla.edu")
+
+# No GPU on purpose: nothing here needs one, and asking for one makes it queue behind training jobs.
+request_cpus            = 1
+request_memory          = 8G
+request_disk            = 1G
+
+output                  = log/probe_box.$(cluster).$(process).out
+error                   = log/probe_box.$(cluster).$(process).err
+log                     = log/probe_box.$(cluster).$(process).log
+
+queue
