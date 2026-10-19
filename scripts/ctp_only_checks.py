@@ -281,6 +281,30 @@ def check_val_hook(root, split, gan_bpm, parts):
           (len(tr), len(va)) == (len(parts["train"]) - 3, 3))
 
 
+def check_stage(root, split, gan_bpm, work):
+    print("\nstaging: scripts/ctp_only_stage_data.py (what a training job copies in)")
+    import shutil
+    import subprocess
+    import pandas as pd
+    from data.dataset import MCTPDataset_mask
+    dst = work / "staged"
+    shutil.rmtree(dst, ignore_errors=True)
+    run = subprocess.run([sys.executable, str(REPO / "scripts/ctp_only_stage_data.py"), str(root), str(dst),
+                          "--split", str(split), "--side", "train"], capture_output=True, text=True)
+    check("it runs", run.returncode == 0, (run.stdout + run.stderr).strip().replace("\n", " | ")[:150])
+    kw = dict(gan_bpm_root=str(gan_bpm), split_json=str(split), label_type="tmax", tmax_ceiling=12.0)
+    same = run.returncode == 0
+    for part in ("train", "monitor") if same else ():
+        a, b = (MCTPDataset_mask(mctp_root=str(r), part=part, **kw) for r in (root, dst))
+        same &= len(a) == len(b) and all(torch.equal(a[i][k], b[i][k]) for i in range(len(a))
+                                         for k in ("cond_image", "gt_image", "mask", "loss_mask"))
+    check("train and monitor read from the copy give the original's items, exactly", same)
+    rows = pd.read_parquet(root / "tmax_index.parquet")
+    held_out = rows[rows["case_id"].isin(json.loads(split.read_text())["val_case_ids"])]
+    check("  negative control: the held-out cases' files were not copied",
+          len(held_out) > 0 and not any((dst / f).exists() for f in held_out["input_relpath"]))
+
+
 def check_predictor(ckpts, state, gan_bpm, cfg):
     print("\npredictor: models/gan_bpm_predictor.py")
     from models.gan_bpm_predictor import GanBpmInitialPredictor
@@ -655,6 +679,7 @@ def main():
 
     parts = check_dataset(root, split, args.gan_bpm, work)
     check_val_hook(root, split, args.gan_bpm, parts)
+    check_stage(root, split, args.gan_bpm, work)
     check_predictor(ckpts, state, args.gan_bpm, cfg)
     check_network(parts, ckpts, args.gan_bpm, cfg)
     check_mirror(parts, ckpts, args.gan_bpm, cfg)

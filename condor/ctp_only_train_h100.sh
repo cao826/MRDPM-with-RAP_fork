@@ -3,7 +3,8 @@
 #   MODE   debug: run.py -d (1 epoch on 2 slices, a monitor pass on 2). full: the whole recipe.
 #   RESUME a checkpoint prefix on /radraid2 (.../checkpoint/<epoch>) to continue from.
 #
-# 1. Copy the staged data, gan_bpm's code and the fold's generator into the workspace.
+# 1. Copy into the workspace: this fold's training cases from the staged data (not the whole
+#    31 GB root), gan_bpm's code and the fold's generator.
 # 2. Write a config pointing at those copies (and at the fold).
 # 3. Train. Every 10 minutes, and at the end, move finished checkpoints and copy everything else
 #    to /radraid2/colivares/mrdpm_ctp_only/runs/<experiment>/.
@@ -47,10 +48,13 @@ echo "==================================================================="
 echo "1. copy in"
 t0=$(date +%s)
 mkdir -p "$W/data" "$W/gan_run/fold_$FOLD/checkpoints" "$W/experiments"
-cp -r "$STAGE/mctp_dataset_f13_isles24_ucla_v2" "$W/data/" || fail "copying the dataset from $STAGE"
-cp -r "$STAGE/gan_bpm" "$W/gan_bpm" || fail "copying gan_bpm from $STAGE"
 cp "$GAN_RUN/fold_$FOLD/split.json" "$W/gan_run/fold_$FOLD/" || fail "copying fold $FOLD's split.json"
 cp "$GAN_RUN/fold_$FOLD/checkpoints/best.pt" "$W/gan_run/fold_$FOLD/checkpoints/" || fail "copying fold $FOLD's best.pt"
+cp -r "$STAGE/gan_bpm" "$W/gan_bpm" || fail "copying gan_bpm from $STAGE"
+python "$CODE/scripts/ctp_only_stage_data.py" "$STAGE/mctp_dataset_f13_isles24_ucla_v2" \
+    "$W/data/mctp_dataset_f13_isles24_ucla_v2" --split "$W/gan_run/fold_$FOLD/split.json" --side train \
+    | tee -a "$W/job_summary.txt"
+[ "${PIPESTATUS[0]}" = 0 ] || fail "staging fold $FOLD's training cases"
 RESUME_LOCAL=
 if [ -n "$RESUME" ]; then
     mkdir -p "$W/resume"

@@ -629,9 +629,12 @@ a perfectly round head).
 4. **The first real run:** fold 0, Tmax, on the H100 box. **Built 2026-10-19:**
    `condor/ctp_only_train_h100.sub` (arguments: fold, `debug` or `full`, an optional resume
    checkpoint).
-   - The job copies the staged dataset and gan_bpm's code from
-     `/radraid2/colivares/mrdpm_ctp_only/stage/`, plus the fold's `split.json` and `best.pt`,
-     into its workspace. The cluster's rule: never run on data in `/radraid*`.
+   - The job copies into its workspace, from `/radraid2/colivares/mrdpm_ctp_only/stage/`,
+     only what it reads (`scripts/ctp_only_stage_data.py`): the Tmax index, the mask cache, and
+     the input and Tmax-label files of the fold's training cases. The whole staged root is
+     31 GB (every fold's held-out cases, rCBF labels and more), against a shared 41 GB free on
+     the box's local disk. Also gan_bpm's code and the fold's `split.json` and `best.pt`. The
+     cluster's rule: never run on data in `/radraid*`.
    - It writes a copy of the config pointing at those copies and at the fold, and trains there.
    - Every 10 minutes it moves finished checkpoints to
      `/radraid2/colivares/mrdpm_ctp_only/runs/<experiment>/` and copies the rest (health files,

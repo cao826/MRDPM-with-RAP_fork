@@ -151,8 +151,9 @@ The reasoning, measurements and code details live in `ctp_only_plan.md` (the § 
 
 - **Decision:** a one-time copy of the dataset and gan_bpm's code from 14958's `/raid` to
   `/radraid2/colivares/mrdpm_ctp_only/stage/` (`rsync -aL`, because the combined root is
-  symlinks). Each job copies them into its workspace, trains there, and moves its results back
-  to `/radraid2/colivares/mrdpm_ctp_only/runs/`.
+  symlinks; 31 GB). Each job copies into its workspace only the files it reads (its side of
+  the fold, Tmax only), trains there, and moves its results back to
+  `/radraid2/colivares/mrdpm_ctp_only/runs/`.
 - **Why:** the H100 box takes no logins. The cluster's rule (Carlos's knowledge doc) is to never
   run on data in `/radraid*`, but to copy in at the start and move results back at the end.
 - **Status:** decided (Carlos). Plan §13 step 4, §14.
