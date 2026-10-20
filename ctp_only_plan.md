@@ -506,6 +506,11 @@ Unchanged from the paper and the code: lr 5e-5, the noise schedule (1000 linear 
 1e-6 → 0.01), EMA, the hardcoded LR schedule (constant to epoch 100, then linear to 0 at 200),
 200 epochs, a monitor pass every 10.
 
+**The loop runs 201 epochs (verified 2026-10-20, `core/base_model.py:train`).** It tests
+`epoch <= n_epoch` before adding 1, an upstream off-by-one. The 201st epoch trains at learning
+rate exactly 0 (`LambdaLR` at 200 gives 0), so the weights don't move, and it isn't saved
+(checkpoints every 10). Checkpoint 200 is the final model; the cost is about 5 min per fold.
+
 ---
 
 ## 12. Checks
