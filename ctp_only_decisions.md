@@ -229,8 +229,9 @@ The reasoning, measurements and code details live in `ctp_only_plan.md` (the § 
 - **Alternatives:** (a) leave it, as Tmax does; (b) also switch it on for Tmax, which would make
   the Tmax folds already trained differ from the later ones.
 - **Code:** `models/network.py` (`zero_hole_residual`), the rCBF config.
-- **Status:** proposed by Claude, built and on in the rCBF config; Carlos to confirm before the
-  rCBF runs start. Plan §18.
+- **Status:** proposed by Claude; **decided (Carlos, 2026-10-20): (a), on for rCBF, off for
+  Tmax.** The effect isn't measured either way. After rCBF's first fold, compare MRDPM's error on
+  valid voxels next to holes with its error far from them (plan §7.2's check). Plan §18.
 
 ### 20. 2026-10-20 · rCBF runs beside Tmax on the H100 box
 
@@ -257,6 +258,7 @@ The current setting is in brackets.
   orientation look on training cases [not done].
 - **gan_bpm's `best.pt` was chosen on the held-out fold** (plan §17) [proposal: disclose].
 - **EMA at test** [the code validates and tests with `netG`, not the EMA copy].
-- **rCBF's hole residual** (#19) [on for rCBF, off for Tmax; Carlos to confirm].
+- **Holes, measured** (#19, plan §7.2): after the first fold of each target, MRDPM's error on
+  valid voxels next to no-data holes against its error far from them [not done].
 - **The evaluation plan** covers rCBF too (#15): rCBF < 0.3 Dice and volume beside the MAE.
 - **An optional ablation:** BRAN from scratch on 3 channels.

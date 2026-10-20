@@ -902,7 +902,7 @@ convolutions carry it to neighbouring voxels that the loss does count (§7.2's s
   noisy input is the noise alone, `sqrt(1 − γ)·ε`. It is training only. Sampling never reads
   `loss_mask`, so nothing at test time comes from the label.
 - On in the rCBF config. The Tmax config doesn't set it, so the Tmax runs keep training as they
-  started; the two models differ in this one switch.
+  started; the two models differ in this one switch. **Decided (Carlos, 2026-10-20).**
 - Checked (synthetic): with it on, gt in the holes changes neither the U-Net's input nor the
   loss, with the real U-Net; with it off (negative control), it changes both. The input where
   the label is valid is the same either way.
