@@ -924,9 +924,20 @@ convolutions carry it to neighbouring voxels that the loss does count (§7.2's s
 **Order.**
 
 1. `git pull` on 14958, then the synthetic checks (`scripts/ctp_only_checks.py`, CPU docker
-   paste): they now cover both configs, the rCBF data, the guard and the switch. Rerun pending.
+   paste): they now cover both configs, the rCBF data, the guard and the switch. **Passed on the
+   box, 138/138 (2026-10-20, `b55ca58`).**
 2. Box checks with the rCBF config: `--part cpu` (docker) and `--part gpu` (Condor, `target =
    rcbf`), into `box_checks/rcbf/`.
+   - **gpu: 6/6 (2026-10-20, Quadro RTX 8000).** The fold-0 checkpoint loads with the recorded
+     sha256 and was trained on the v2 root. Control: the predictor alone, through MRDPM's
+     dataset and wrapper, scores 0.222366 over the 793 held-out slices, the checkpoint's stored
+     `val_L_pix_brain` exactly (0.222 rCBF). The Network from the rCBF config at 512: the
+     predictor's weights after init are the checkpoint's; one forward gives a finite loss
+     (0.7518), 0.195 s warm, 2.68 GiB peak.
+   - **cpu:** the first try stopped in section 3, after its first check passed (the test part
+     has gan_bpm's 793 validation slices, in order): DataLoader workers ran out of shared
+     memory. Docker gives a container 64 MB of `/dev/shm`; the paste needs `--shm-size=8g`
+     (what the Condor jobs ask for), or `--workers 0`. Rerun pending.
 3. Stage rCBF on the H100 box.
 4. An rCBF debug run there, then the DAG.
 
