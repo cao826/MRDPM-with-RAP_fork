@@ -680,7 +680,7 @@ a perfectly round head).
 5. **Score against gan_bpm fold 0** on the held-out fold, in seconds, over `support`.
    - Proposal: write MRDPM's `Out_` maps as gan_bpm's external-maps `.npz`
      (`pred_norm = 2·out − 1`), so gan_bpm's evaluation code scores both models the same way.
-   - Not designed yet.
+   - **Designed 2026-10-20:** `ctp_only_eval_plan.md` (decisions #21), the CV and ISLES 2018.
 
 ---
 

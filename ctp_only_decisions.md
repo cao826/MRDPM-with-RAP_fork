@@ -249,17 +249,33 @@ The reasoning, measurements and code details live in `ctp_only_plan.md` (the § 
   runs, Tmax holds 2 GPUs and this DAG the third. 2 at a time fits only after it ends.
 - **Status:** adopted. Plan §18.
 
+### 21. 2026-10-20 · How MRDPM is evaluated: as gan_bpm, CV and ISLES 2018
+
+- **Decision:** evaluate MRDPM the way gan_bpm is evaluated, against gan_bpm, both in the
+  5-fold CV and on ISLES 2018 (all 94 scans). Metrics: MAE, NRMSE, PSNR and SSIM over the brain
+  mask, and over the full frame with the prediction set to background outside the mask (the
+  way other papers report; optimistic, so always beside the brain numbers). **The headline is
+  the Dice between the rCBF < 0.3 core and the DWI lesion on ISLES 2018**, against the label's
+  own Dice as the ceiling.
+- **Why:** the comparison that matters is with gan_bpm, so it uses gan_bpm's scoring code and
+  conventions; the papers' full-frame numbers have to be reproducible too.
+- **Plan:** `ctp_only_eval_plan.md`; its §9 lists what is still open (EMA, one sample, an
+  all-data MRDPM for ISLES 2018, a CSF region, context rows).
+- **Status:** decided (Carlos). Freezes when §9 is settled; nothing is scored before (#15).
+
 ---
 
 ## Open
 
 The current setting is in brackets.
 
-- **The evaluation plan** (#15), to freeze before scoring.
+- **The evaluation plan** (#15, #21): drafted in `ctp_only_eval_plan.md`; its §9 to settle,
+  then freeze.
 - **Validity checks on training cases** (plan §17): repeat the masking check and the
   orientation look on training cases [not done].
 - **gan_bpm's `best.pt` was chosen on the held-out fold** (plan §17) [proposal: disclose].
-- **EMA at test** [the code validates and tests with `netG`, not the EMA copy].
+- **EMA at test** [the code validates and tests with `netG`, not the EMA copy; proposal:
+  EMA, `ctp_only_eval_plan.md` §9.1].
 - **Holes, measured** (#19, plan §7.2): after the first fold of each target, MRDPM's error on
   valid voxels next to no-data holes against its error far from them [not done].
 - **The evaluation plan** covers rCBF too (#15): rCBF < 0.3 Dice and volume beside the MAE.
