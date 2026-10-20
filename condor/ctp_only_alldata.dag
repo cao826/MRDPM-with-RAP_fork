@@ -1,0 +1,28 @@
+# The two all-data MRDPM runs (ctp_only_eval_plan.md §6), Tmax then rCBF, one at a time on one
+# H100. Each node is condor/ctp_only_train_h100.sub with fold=all and mode=full: every case of the
+# 5-fold split, gan_bpm's all-data generator at epoch_<M> as the predictor, the 200-epoch recipe,
+# no monitor. About 23 h each. These models are for ISLES 2018 only: they trained on every CV case.
+# Results land in /radraid2/colivares/mrdpm_ctp_only/runs/train_ctp_only_f13_<target>_all_<date_time>/.
+#
+# First, once: ctp_only_stage_alldata.sub, then a debug run for each target, e.g.
+#   condor_submit ctp_only_train_h100.sub -append 'fold = all' -append 'target = rcbf'
+#
+#   cd /raid/colivares/github_repos/MRDPM-with-RAP_fork && git pull
+#   condor_q -run          # this account may hold 3 GPUs at once; going over gets jobs booted
+#   cd condor && mkdir -p log && condor_submit_dag ctp_only_alldata.dag
+#
+# MAXJOBS counts only this DAG's jobs. With the Tmax and rCBF fold DAGs running (one GPU each),
+# this DAG's one makes 3, the cap: submit it only after Tmax fold 0, submitted on its own, ends.
+#
+# NO RETRY: a retried node would restart from epoch 0. Resume a failed one by hand from its last
+# checkpoint (ctp_only_train_h100.sub's header, with -append 'fold = all' -append 'target = ...').
+
+JOB      ALL_TMAX  ctp_only_train_h100.sub
+VARS     ALL_TMAX  fold="all" mode="full" target="tmax"
+CATEGORY ALL_TMAX  h100
+
+JOB      ALL_RCBF  ctp_only_train_h100.sub
+VARS     ALL_RCBF  fold="all" mode="full" target="rcbf"
+CATEGORY ALL_RCBF  h100
+
+MAXJOBS  h100  1

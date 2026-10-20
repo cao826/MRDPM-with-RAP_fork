@@ -449,6 +449,7 @@ intermediate tensors. A check enforces that `y` is bitwise equal to `Generator.f
 | `models/gan_bpm_predictor.py`, again | `target` (and `tmax_ceiling`) pick what the checkpoint guard expects (§18) | Tmax at 12 s, as before |
 | `models/network.py`, again | `zero_hole_residual`: the training residual × `loss_mask`, not `mask` (§18) | unchanged |
 | `config/ctp_only_f13_rcbf_fold0.json` | new: Tmax's config with only the label's keys changed (§18) | n/a |
+| `config/ctp_only_f13_{tmax,rcbf}_all.json` | new: the all-data models for ISLES 2018 (`ctp_only_eval_plan.md` §6, decisions #23) | n/a |
 
 **Untouched:** the diffusion maths, the training loop, EMA, checkpointing and `run.py`.
 
@@ -772,8 +773,8 @@ a perfectly round head).
 - ~~§7.2~~ Decided 2026-10-19: (c), `loss_mask` = `support` for the loss and every metric.
 - ~~**Fine-tune or freeze**~~ Decided 2026-10-19: fine-tune jointly, as the paper (decisions #11).
 - ~~**Epochs**~~ Decided 2026-10-19: the paper's 200 with its schedule (decisions #11).
-- **EMA at test:** the code validates and tests with `netG`, not the EMA copy. The paper says
-  EMA "was employed" without saying where.
+- ~~**EMA at test**~~ Decided 2026-10-20: test with the EMA weights (decisions #22). The
+  paper says EMA "was employed" without saying where; its code tests with `netG`.
 - ~~**Monitor subset size** and `val_epoch`~~ Decided 2026-10-19: 16 slices every 10 epochs
   (decisions #12).
 - **Validity (§17):** repeat the masking check and the orientation look on training cases, so

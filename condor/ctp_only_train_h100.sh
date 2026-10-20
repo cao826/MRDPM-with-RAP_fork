@@ -1,5 +1,7 @@
 #!/bin/bash
 # Invoked by ctp_only_train_h100.sub as: ctp_only_train_h100.sh FOLD MODE JOBID [RESUME]
+#   FOLD   0-4, or all: the all-data model for ISLES 2018 (ctp_only_eval_plan.md §6), from
+#          config/ctp_only_f13_<target>_all.json and gan_bpm's all-data generator
 #   MODE   debug: run.py -d (1 epoch on 4 slices, a monitor pass on 2). full: the whole recipe.
 #   JOBID  Condor's cluster.process: names this job's run folder on /home.
 #   RESUME a checkpoint prefix on /radraid2 (.../checkpoint/<epoch>) to continue from.
@@ -46,6 +48,17 @@ case "$TARGET" in
     rcbf) GAN_RUN="$STAGE/gan_run_rcbf"; STAGED="$STAGE/STAGED_OK_rcbf" ;;
     *) fail "target must be tmax or rcbf, not '$TARGET'" ;;
 esac
+# fold k reads gan_run*/fold_k with the fold-0 config; all reads gan_run_all_<target>/all
+# (condor/ctp_only_stage_alldata.sh) with the all-data config.
+if [ "$FOLD" = all ]; then
+    [ -f "$STAGED" ] || fail "no $STAGED: the $TARGET data aren't staged"
+    GAN_RUN="$STAGE/gan_run_all_$TARGET"; STAGED="$STAGE/STAGED_OK_all"; RUN_SUB=all
+    CONFIG="$CODE/config/ctp_only_f13_${TARGET}_all.json"
+else
+    case "$FOLD" in [0-4]) ;; *) fail "fold must be 0-4 or all, not '$FOLD'" ;; esac
+    RUN_SUB="fold_$FOLD"
+    CONFIG="$CODE/config/ctp_only_f13_${TARGET}_fold0.json"
+fi
 
 say "host: $(hostname)   date: $(date -Is)   target $TARGET   fold $FOLD   mode $MODE   job $JOBID   resume ${RESUME:-<none>}"
 nvidia-smi -L || echo "(nvidia-smi -L failed)"
@@ -57,7 +70,7 @@ n_gpus=$(env -u CUDA_VISIBLE_DEVICES python -c "import torch; print(torch.cuda.d
 say "MRDPM code: $(git -C "$CODE" rev-parse --short HEAD 2>/dev/null || echo '<git unavailable>')"
 [ -f "$STAGED" ] || fail "no $STAGED: run condor/ctp_only_stage_home.sub (target $TARGET) first"
 say "stage: $(cat "$STAGED")"
-[ -f "$GAN_RUN/fold_$FOLD/checkpoints/best.pt" ] || fail "fold $FOLD of $TARGET isn't staged"
+[ -f "$GAN_RUN/$RUN_SUB/split.json" ] || fail "$RUN_SUB of $TARGET isn't staged"
 df -h /home | tail -1
 mkdir -p "$EXP_BASE" || fail "cannot create $EXP_BASE"
 
@@ -72,16 +85,25 @@ fi
 
 echo "==================================================================="
 echo "1. the job's config"
-python - "$CODE/config/ctp_only_f13_${TARGET}_fold0.json" "$W/job_config.json" "$STAGE" "$EXP_BASE" "$FOLD" "$RESUME_LOCAL" "$TARGET" "$GAN_RUN" <<'PYEOF' || fail "writing the job config"
+python - "$CONFIG" "$W/job_config.json" "$STAGE" "$EXP_BASE" "$FOLD" "$RESUME_LOCAL" "$TARGET" "$GAN_RUN/$RUN_SUB" <<'PYEOF' || fail "writing the job config"
 import json, sys
-src, dst, stage, base, fold, resume, target, gan_run = sys.argv[1:]
+from pathlib import Path
+src, dst, stage, base, fold, resume, target, run = sys.argv[1:]
 cfg = json.loads("".join(line.split("//")[0] + "\n" for line in open(src)))    # as core/praser.py reads it
-data, gan, run = f"{stage}/mctp_dataset_f13_isles24_ucla_v2", f"{stage}/gan_bpm", f"{gan_run}/fold_{fold}"
-for phase, key in (("train", "which_dataset"), ("train", "which_val_dataset"), ("test", "which_dataset")):
+data, gan = f"{stage}/mctp_dataset_f13_isles24_ucla_v2", f"{stage}/gan_bpm"
+# The all-data config has no monitor, and its test set is ISLES 2018, which training never reads.
+blocks = ([("train", "which_dataset")] if fold == "all" else
+          [("train", "which_dataset"), ("train", "which_val_dataset"), ("test", "which_dataset")])
+for phase, key in blocks:
     cfg["datasets"][phase][key]["args"].update(mctp_root=data, gan_bpm_root=gan, split_json=f"{run}/split.json")
-cfg["model"]["which_networks"][0]["args"]["initial_predictor"].update(
-    gan_bpm_root=gan, checkpoint=f"{run}/checkpoints/best.pt", expect_fold=int(fold))
-cfg["name"] = f"ctp_only_f13_{target}_fold{fold}"
+ip = cfg["model"]["which_networks"][0]["args"]["initial_predictor"]
+checkpoint = f"{run}/checkpoints/{Path(ip['checkpoint']).name}"     # best.pt, or the all-data epoch_<M>.pt
+if not Path(checkpoint).is_file():
+    sys.exit(f"{checkpoint} isn't staged")
+ip.update(gan_bpm_root=gan, checkpoint=checkpoint)
+if fold != "all":
+    ip["expect_fold"] = int(fold)
+cfg["name"] = f"ctp_only_f13_{target}_" + ("all" if fold == "all" else f"fold{fold}")
 cfg["path"].update(base_dir=base, resume_state=resume or None)
 json.dump(cfg, open(dst, "w"), indent=1)
 print(f"name {cfg['name']}, base_dir {base}, resume_state {cfg['path']['resume_state']}")

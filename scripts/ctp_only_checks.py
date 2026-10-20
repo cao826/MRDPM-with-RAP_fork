@@ -3,9 +3,11 @@
 Builds a small fake f13 root (three datasets, a skull, no-data holes, one patient with two
 cases; Tmax and rCBF labels on the same inputs) and fake gan_bpm checkpoints in a temp dir. Then
 it checks the dataset, the `which_val_dataset` hook, the gan_bpm predictor, Network's
-conditioning and loss masks, the U-Net's `mirror_hs` switch, `zero_hole_residual` and both
-configs, and runs run.py's train (debug) and test phases end to end on the CPU, Tmax's and
-(train only) rCBF's. Checks marked "negative control" show that the check above them can fail.
+conditioning and loss masks, the U-Net's `mirror_hs` switch, `zero_hole_residual` and the
+four configs (each target's fold-0 and all-data), and runs run.py's train (debug) and test
+phases end to end on the CPU: Tmax's, rCBF's (train only) and the all-data configs' (train
+only, no validation set). Checks marked "negative control" show that the check above them can
+fail.
 
     python scripts/ctp_only_checks.py [--gan-bpm PATH] [--keep DIR]
 
@@ -37,6 +39,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))       # MRDPM's `models` and `data` must win over gan_bpm's
 CONFIG = REPO / "config/ctp_only_f13_tmax_fold0.json"
 CONFIG_RCBF = REPO / "config/ctp_only_f13_rcbf_fold0.json"
+CONFIG_ALL = {t: REPO / f"config/ctp_only_f13_{t}_all.json" for t in ("tmax", "rcbf")}
 H = 256                             # gan_bpm's generator needs H, W >= 256
 MARKERS = {"isles24": -30.0, "ucla_evt": -1.0, "ucla_neg": -1.0}    # each dataset's no-data value
 RCBF_MARKERS = {"isles24": None, "ucla_evt": -1.0, "ucla_neg": -1.0}  # ISLES'24 rCBF has none
@@ -144,7 +147,9 @@ def make_checkpoints(d, gan_bpm, data_root):
     bad = {"good": {}, "ceiling40": {"tmax_ceiling": None}, "phases4": {"n_phases": 4},
            "rcbf": {"target": "rcbf"}, "sqrt": {"label_transform": "sqrt"}, "fold1": {"fold": 1},
            "rcbf_good": {"target": "rcbf", "tmax_ceiling": 40.0},
-           "rcbf_sqrt": {"target": "rcbf", "tmax_ceiling": 40.0, "label_transform": "sqrt"}}
+           "rcbf_sqrt": {"target": "rcbf", "tmax_ceiling": 40.0, "label_transform": "sqrt"},
+           "all_tmax": {"fold": "all", "all_data": True},
+           "all_rcbf": {"target": "rcbf", "tmax_ceiling": 40.0, "fold": "all", "all_data": True}}
     paths = {}
     for name, change in bad.items():
         paths[name] = d / f"{name}.pt"
@@ -439,6 +444,11 @@ def check_predictor(ckpts, state, gan_bpm, cfg):
           raises(lambda: GanBpmInitialPredictor(gan_bpm, ckpts["good"], target="rcbf"), ValueError))
     check("target rcbf refuses an rCBF sqrt checkpoint",
           raises(lambda: GanBpmInitialPredictor(gan_bpm, ckpts["rcbf_sqrt"], target="rcbf"), ValueError))
+    check("an all-data checkpoint (fold 'all') loads without expect_fold, for each target",
+          not raises(lambda: GanBpmInitialPredictor(gan_bpm, ckpts["all_tmax"]))
+          and not raises(lambda: GanBpmInitialPredictor(gan_bpm, ckpts["all_rcbf"], target="rcbf")))
+    check("  negative control: expect_fold=0 refuses it",
+          raises(lambda: GanBpmInitialPredictor(gan_bpm, ckpts["all_tmax"], expect_fold=0), ValueError))
 
     print("\npredictor inside Network: initialization order (§8.4)")
     from core.base_network import BaseNetwork
@@ -718,6 +728,98 @@ def check_config(cfg, path=CONFIG, tmax_cfg=None):
     check("  negative control: a changed batch size is caught", caught == ["datasets.train.dataloader.args.batch_size"])
 
 
+# What may differ between an all-data config and its target's fold-0 config: the split, no monitor,
+# ISLES 2018 as the test set, and the all-data generator without a fold (ctp_only_eval_plan.md §6).
+ALL_KEYS = ["name", "datasets.train.which_dataset.args.split_json",
+            "datasets.train.which_dataset.args.monitor_cases_per_dataset", "datasets.train.which_val_dataset",
+            "datasets.test.which_dataset.args.mctp_root", "datasets.test.which_dataset.args.split_json",
+            "model.which_networks[[]0[]].args.initial_predictor.checkpoint",
+            "model.which_networks[[]0[]].args.initial_predictor.expect_fold"]
+
+
+def check_config_all(cfg, path, fold0_cfg):
+    print(f"\nconfig: {path.relative_to(REPO)} (all-data)")
+    import fnmatch
+    tr = cfg["datasets"]["train"]["which_dataset"]["args"]
+    ip = cfg["model"]["which_networks"][0]["args"]["initial_predictor"]
+    fold0_ip = fold0_cfg["model"]["which_networks"][0]["args"]["initial_predictor"]
+    extra = [d for d in config_diff(fold0_cfg, cfg) if not any(fnmatch.fnmatchcase(d, k) for k in ALL_KEYS)]
+    check("it is the fold-0 config except for the split, the monitor, the test set and the predictor", not extra,
+          ", ".join(extra))
+    changed = copy.deepcopy(cfg)
+    changed["model"]["which_model"]["args"]["optimizers"][0]["lr"] = 1e-4
+    caught = [d for d in config_diff(fold0_cfg, changed) if not any(fnmatch.fnmatchcase(d, k) for k in ALL_KEYS)]
+    check("  negative control: a changed learning rate is caught", caught == ["model.which_model.args.optimizers[0].lr"])
+    check("every case trains: no monitor carve, no monitor set",
+          tr.get("monitor_cases_per_dataset") == 0 and "which_val_dataset" not in cfg["datasets"]["train"])
+    split, ckpt = Path(tr["split_json"]), Path(ip["checkpoint"])
+    fold_run = Path(fold0_ip["checkpoint"]).parent.parent.parent.name
+    check("split and predictor are gan_bpm's all-data run of the folds' recipe: <run>_all/all/{split.json, checkpoints/epoch_<M>.pt}",
+          split.parent.name == "all" and ckpt.parent.parent == split.parent and ckpt.name.startswith("epoch_")
+          and split.parent.parent.name == fold_run.replace("_k5", "_all"), f"{split.parent.parent.name}, {ckpt.name}")
+    check("no expect_fold: the all-data checkpoint has none", "expect_fold" not in ip)
+    check("the test set is ISLES 2018, never the CV data it trained on",
+          "isles2018" in cfg["datasets"]["test"]["which_dataset"]["args"]["mctp_root"])
+
+
+def check_run_py_all(cfg, root, gan_bpm, ckpt, work):
+    """run.py train -d with an all-data config: every case trains, no validation set."""
+    import argparse as ap
+    import pandas as pd
+    import core.praser as Praser
+    import models.network as network
+    from data.dataset import MCTPDataset_mask
+    try:
+        import npy2img  # noqa: F401
+    except ImportError:
+        sys.modules["npy2img"] = types.ModuleType("npy2img")
+    import run
+
+    label = cfg["datasets"]["train"]["which_dataset"]["args"]["label_type"]
+    print(f"\nrun.py train -d on the CPU, the all-data {label} config")
+    cases = sorted(pd.read_parquet(root / f"{label}_index.parquet")["case_id"].unique())
+    split = write_split(work / f"all_{label}/all/split.json", cases, [])
+    kw = dict(mctp_root=str(root), gan_bpm_root=str(gan_bpm), split_json=str(split), label_type=label)
+    whole = MCTPDataset_mask(part="train", monitor_cases_per_dataset=0, **kw)
+    check("the train part holds every case of the split", whole.case_ids == cases, f"{len(whole.case_ids)} cases")
+    check("  negative control: the default monitor carve would take patients out",
+          len(MCTPDataset_mask(part="train", **kw).case_ids) < len(cases))
+
+    c = copy.deepcopy(cfg)
+    c["path"]["base_dir"] = str(work / "experiments")
+    c["datasets"]["train"]["which_dataset"]["args"].update(mctp_root=str(root), gan_bpm_root=str(gan_bpm), split_json=str(split))
+    c["datasets"]["train"]["dataloader"]["args"]["num_workers"] = 0       # macOS workers spawn
+    c["model"]["which_networks"] = [network_opt(c, gan_bpm, ckpt)]
+    for p in ("train", "test"):
+        c["model"]["which_networks"][0]["args"]["beta_schedule"][p]["n_timestep"] = 5
+    run_dir = work / f"run_{label}_all"
+    run_dir.mkdir(exist_ok=True)
+    train_cfg = run_dir / "train.json"
+    train_cfg.write_text(json.dumps(c, indent=1))
+    original = network.Network.set_new_noise_schedule
+    network.Network.set_new_noise_schedule = (
+        lambda self, device=torch.device("cpu"), phase="train": original(self, device=device, phase=phase))
+    cwd = os.getcwd()
+    os.chdir(run_dir)
+    try:
+        args = ap.Namespace(config=str(train_cfg), phase="train", batch=None, gpu_ids=None, debug=True, port="21012")
+        opt = Praser.parse(args)
+        opt["world_size"] = 1
+        run.main_worker(0, 1, opt)
+        exp = Path(opt["path"]["experiments_root"])
+        check("train: checkpoint 1 written (Network, EMA, state)",
+              all((exp / "checkpoint" / f"1{s}").is_file() for s in ("_Network.pth", "_Network_ema.pth", ".state")))
+        rows = read_csv(exp / "health/train.csv")
+        check("health: train.csv has epoch 1, finite", len(rows) == 1 and all(
+            math.isfinite(float(rows[0][k])) for k in ("loss", "loss_diff", "loss_init")))
+        check("no validation set: no monitor pass, no monitor.csv",
+              not (exp / "results/val").exists() and not (exp / "health/monitor.csv").exists())
+        check("train.log names the all-data checkpoint", str(ckpt) in (exp / "train.log").read_text())
+    finally:
+        os.chdir(cwd)
+        network.Network.set_new_noise_schedule = original
+
+
 def check_run_py(cfg, root, split, ckpt, state, gan_bpm, work, full=True):
     """run.py train -d with `cfg`; with `full`, also a resume and test -d."""
     label = cfg["datasets"]["train"]["which_dataset"]["args"]["label_type"]
@@ -849,6 +951,7 @@ def main():
         sys.path.append(str(args.gan_bpm))      # appended, as MCTPDataset_mask does
 
     cfg, cfg_rcbf = load_config(CONFIG), load_config(CONFIG_RCBF)
+    cfg_all = {t: load_config(path) for t, path in CONFIG_ALL.items()}
     tmp = None
     if args.keep is None:
         tmp = tempfile.TemporaryDirectory()
@@ -875,8 +978,12 @@ def main():
     check_mirror(parts, ckpts, args.gan_bpm, cfg)
     check_config(cfg)
     check_config(cfg_rcbf, CONFIG_RCBF, tmax_cfg=cfg)
+    for t, fold0 in (("tmax", cfg), ("rcbf", cfg_rcbf)):
+        check_config_all(cfg_all[t], CONFIG_ALL[t], fold0)
     check_run_py(cfg, root, split, ckpts["good"], state, args.gan_bpm, work)
     check_run_py(cfg_rcbf, root, split, ckpts["rcbf_good"], state, args.gan_bpm, work, full=False)
+    check_run_py_all(cfg_all["tmax"], root, args.gan_bpm, ckpts["all_tmax"], work)
+    check_run_py_all(cfg_all["rcbf"], root, args.gan_bpm, ckpts["all_rcbf"], work)
 
     n_fail = RESULTS.count(False)
     print(f"\n{len(RESULTS) - n_fail}/{len(RESULTS)} checks passed")

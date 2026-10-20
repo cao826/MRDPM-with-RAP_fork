@@ -1,0 +1,175 @@
+{
+    // ctp_only_eval_plan.md §6: the all-data MRDPM for rCBF, for ISLES 2018 only. It is
+    // ctp_only_f13_rcbf_fold0.json trained on every case of the 5-fold split (gan_bpm's all-data
+    // split.json), with gan_bpm's all-data lambda_adv = 0 generator at epoch_<M> as the initial
+    // predictor, and no monitor set. scripts/ctp_only_checks.py refuses any other difference.
+    // Never score it on the CV data: it trained on all of it. The H100 job (fold = all) rewrites
+    // the paths to its copies on the box.
+    "name": "ctp_only_f13_rcbf_all",
+    "gpu_ids": [0],
+    "seed" : -1,
+    "finetune_norm": false,
+
+    "path": {
+        "base_dir": "/radraid2/colivares/mrdpm_ctp_only/experiments",
+        "code": "code",
+        "tb_logger": "tb_logger",
+        "results": "results",
+        "checkpoint": "checkpoint",
+        "resume_state": null
+    },
+
+    "datasets": {
+        "train": {
+            "which_dataset": {
+                "name": ["data.dataset", "MCTPDataset_mask"],
+                "args": {
+                    "mctp_root": "/raid/colivares/mctp_dataset_f13_isles24_ucla_v2",
+                    "gan_bpm_root": "/raid/colivares/github_repos/gan_bpm",
+                    "split_json": "/radraid2/colivares/matrix/gan_bpm_rcbf_f13uclav2_adv0_all/all/split.json",
+                    "part": "train",
+                    "monitor_cases_per_dataset": 0, // every case trains: no monitor (eval plan §6)
+                    "label_type": "rcbf",
+                    "tmax_ceiling": 12.0 // unused for rCBF: its bounds are (0, 2)
+                }
+            },
+            "dataloader":{
+                "validation_split": 0, // no validation set: training never pauses to sample
+                "args":{
+                    "batch_size": 4, // the paper's batch size (decisions #11)
+                    "num_workers": 8,
+                    "shuffle": true,
+                    "pin_memory": true,
+                    "drop_last": true
+                },
+                "val_args":{
+                    "batch_size": 16, // sampling only: 39.7 GiB on the H100
+                    "num_workers": 4,
+                    "shuffle": false,
+                    "pin_memory": true,
+                    "drop_last": false
+                }
+            }
+        },
+        "test": {
+            "which_dataset": { // ISLES 2018, all 94 scans: the external test set
+                "name": ["data.dataset", "MCTPDataset_mask"],
+                "args": {
+                    "mctp_root": "/raid/colivares/mctp_dataset_msu_f13_isles2018_all94",
+                    "gan_bpm_root": "/raid/colivares/github_repos/gan_bpm",
+                    "split_json": "/radraid2/colivares/mrdpm_ctp_only/isles2018/split.json", // every ISLES 2018 scan as val_case_ids (eval plan §7)
+                    "part": "test",
+                    "label_type": "rcbf",
+                    "tmax_ceiling": 12.0 // unused for rCBF: its bounds are (0, 2)
+                }
+            },
+            "dataloader":{
+                "args":{
+                    "batch_size": 16, // sampling only
+                    "num_workers": 4,
+                    "pin_memory": true
+                }
+            }
+        }
+    },
+
+    "model": {
+        "which_model": {
+            "name": ["models.model", "Palette"],
+            "args": {
+                "sample_num": 4,
+                "task": "my_mission_mask",
+                "ema_scheduler": {
+                    "ema_start": 1,
+                    "ema_iter": 1,
+                    "ema_decay": 0.9999
+                },
+                "optimizers": [
+                    { "lr": 5e-5, "weight_decay": 0}
+                ],
+                "health_log": { // models/health.py; label_scale = rCBF's ceiling, 2, so errors are in rCBF
+                    "label_scale": 2.0,
+                    "unit": "rCBF",
+                    "panels": 4
+                }
+            }
+        },
+        "which_networks": [
+            {
+                "name": ["models.network", "Network"],
+                "args": {
+                    "init_type": "kaiming",
+                    "module_name": "guided_diffusion",
+                    "initial_predictor": {
+                        "type": "gan_bpm",
+                        "gan_bpm_root": "/raid/colivares/github_repos/gan_bpm",
+                        "checkpoint": "/radraid2/colivares/matrix/gan_bpm_rcbf_f13uclav2_adv0_all/all/checkpoints/epoch_9.pt", // epoch_<M>: the folds' best.pt counterpart
+                        "n_phases": 3,
+                        "target": "rcbf" // the checkpoint must be an rCBF one
+                    },
+                    "mask_unet_cond": true, // the U-Net's condition x envelope; the predictor's stays whole (§7.1)
+                    "zero_hole_residual": true, // the residual is 0 at no-data voxels in training (§18)
+                    "unet": {
+                        "in_channel": 4, // 3 CTP phases + the noisy residual
+                        "out_channel": 1,
+                        "inner_channel": 64,
+                        "channel_mults": [
+                            1,
+                            2,
+                            4,
+                            8
+                        ],
+                        "attn_res": [
+                            16
+                        ],
+                        "num_head_channels": 32,
+                        "res_blocks": 2,
+                        "dropout": 0.2,
+                        "image_size": 512,
+                        "mirror_hs": false // our scans aren't aligned, so no asymmetry flip (ctp_only_decisions.md)
+                    },
+                    "beta_schedule": {
+                        "train": {
+                            "schedule": "linear",
+                            "n_timestep": 1000,
+                            "linear_start": 1e-6,
+                            "linear_end": 0.01
+                        },
+                        "test": {
+                            "schedule": "linear",
+                            "n_timestep": 1000,
+                            "linear_start": 1e-6,
+                            "linear_end": 0.01
+                        }
+                    }
+                }
+            }
+        ],
+        "which_losses": [
+            "mse_loss"
+        ],
+        "which_metrics": [
+            "mae"
+        ],
+        "which_lr_schedulers": [
+    ]
+    },
+
+    "train": {
+        "n_epoch": 200,
+        "n_iter": 1e8,
+        "val_epoch": 10,
+        "save_checkpoint_epoch": 10,
+        "log_iter": 2000,
+        "tensorboard" : false
+    },
+
+    "debug": { // run.py -d: one epoch on 4 training slices (one batch), then a monitor pass on 2 slices
+        "n_epoch": 0, // the loop runs while epoch <= n_epoch, so 0 is one epoch
+        "val_epoch": 1,
+        "save_checkpoint_epoch": 1,
+        "log_iter": 1,
+        "debug_split": 4, // a whole batch: the train loader drops an incomplete one
+        "debug_val_split": 2
+    }
+}

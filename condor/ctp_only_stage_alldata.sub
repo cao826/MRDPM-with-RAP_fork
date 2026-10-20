@@ -1,0 +1,27 @@
+# One-time: copy gan_bpm's all-data lambda_adv = 0 generators (Tmax and rCBF) and their split.json
+# to the H100 box's own disk, for the all-data MRDPM runs (ctp_only_eval_plan.md §6). Needs both
+# targets' data staged first (ctp_only_stage_home.sub, tmax and rcbf). A few hundred MB; no GPU.
+# Safe beside running training jobs: it only adds gan_run_all_<target>/ and STAGED_OK_all.
+#
+#   cd condor && mkdir -p log && condor_submit ctp_only_stage_alldata.sub
+#   cat log/ctp_only_stage_alldata.<cluster>.0.out      # paste this back
+universe                = docker
+docker_image            = registry.cvib.ucla.edu/colivares:mrdpm-env-v1
+
+executable              = ctp_only_stage_alldata.sh
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT
+
+requirements            = (Machine == "REDLRADADM35838.ad.medctr.ucla.edu")
+
+request_cpus            = 1
+request_memory          = 2G
+request_disk            = 1G
+
+output                  = log/ctp_only_stage_alldata.$(cluster).$(process).out
+error                   = log/ctp_only_stage_alldata.$(cluster).$(process).err
+log                     = log/ctp_only_stage_alldata.$(cluster).$(process).log
+stream_output           = True
+stream_error            = True
+
+queue

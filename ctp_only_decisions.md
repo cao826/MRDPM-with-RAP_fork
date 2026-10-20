@@ -263,19 +263,48 @@ The reasoning, measurements and code details live in `ctp_only_plan.md` (the § 
   all-data MRDPM for ISLES 2018, a CSF region, context rows).
 - **Status:** decided (Carlos). Freezes when §9 is settled; nothing is scored before (#15).
 
+### 22. 2026-10-20 · The evaluation's open items, settled
+
+- **Decision (Carlos):**
+  - MRDPM is tested with its **EMA weights**.
+  - **One sample per slice, as the paper's code does**: no averaging, no repeat-sample check.
+  - **All-data MRDPM runs** for ISLES 2018; the 5-fold models are compared with gan_bpm's in
+    the CV.
+  - **No edits to gan_bpm** for now, so no CSF region: scoring scripts in this repo import
+    gan_bpm's evaluation code read-only, score gan_bpm's models with it too, and must reproduce
+    gan_bpm's published numbers.
+  - **Every applicable gan_bpm row** (λ_adv = 0, LSGAN, WGAN-GP; on ISLES 2018 both snapshots),
+    since their performance is about the same.
+- **Why:** EMA is standard for diffusion models and the paper says it "employed" it; averaging
+  samples would re-create the squeeze toward normal that hurts the core Dice.
+- **Status:** decided (Carlos). `ctp_only_eval_plan.md` is frozen (§9).
+
+### 23. 2026-10-20 · The all-data MRDPM runs
+
+- **Decision:** `config/ctp_only_f13_{tmax,rcbf}_all.json`: each target's fold-0 config,
+  trained on all 443 cases (gan_bpm's all-data `all/split.json`), **no monitor** (every case
+  trains, as gan_bpm's all-data runs have no validation), ISLES 2018 as the test set, and gan_bpm's
+  all-data λ_adv = 0 generator at `epoch_<M>` as the predictor (Tmax `epoch_5`, rCBF `epoch_9`,
+  from gan_bpm's records; the staging job fails if either is missing).
+- **Why `epoch_<M>`:** the all-data counterpart of the folds' `best.pt`. gan_bpm's `last` did
+  better on ISLES 2018, so choosing it would be choosing on the external test set.
+- **Running it:** `condor/ctp_only_stage_alldata.sub` stages the two generators (adds files
+  only); the training job takes `fold = all`; `condor/ctp_only_alldata.dag` runs both, one at a
+  time. With both fold DAGs running, it fits under the 3-GPU cap only after Tmax fold 0 ends.
+- **Alternatives:** keep a monitor (3 patients fewer in training); `last` as the predictor.
+- **Status:** adopted. `ctp_only_eval_plan.md` §6.
+
 ---
 
 ## Open
 
 The current setting is in brackets.
 
-- **The evaluation plan** (#15, #21): drafted in `ctp_only_eval_plan.md`; its §9 to settle,
-  then freeze.
+- **The evaluation build** (`ctp_only_eval_plan.md` §7): EMA testing, the test job, the map
+  converter, the two scoring scripts, ISLES 2018 on the H100 [not built].
 - **Validity checks on training cases** (plan §17): repeat the masking check and the
   orientation look on training cases [not done].
 - **gan_bpm's `best.pt` was chosen on the held-out fold** (plan §17) [proposal: disclose].
-- **EMA at test** [the code validates and tests with `netG`, not the EMA copy; proposal:
-  EMA, `ctp_only_eval_plan.md` §9.1].
 - **Holes, measured** (#19, plan §7.2): after the first fold of each target, MRDPM's error on
   valid voxels next to no-data holes against its error far from them [not done].
 - **The evaluation plan** covers rCBF too (#15): rCBF < 0.3 Dice and volume beside the MAE.
