@@ -294,6 +294,18 @@ The reasoning, measurements and code details live in `ctp_only_plan.md` (the § 
 - **Alternatives:** keep a monitor (3 patients fewer in training); `last` as the predictor.
 - **Status:** adopted. `ctp_only_eval_plan.md` §6.
 
+### 24. 2026-10-20 · The fold models are scored on ISLES 2018 too
+
+- **Decision (Carlos):** besides the CV and the all-data models, each of MRDPM's 5 fold models
+  is scored on all 94 ISLES 2018 scans, against gan_bpm's model of the same fold.
+- **How, without editing gan_bpm:** gan_bpm never saved fold-model maps for ISLES 2018, so the
+  scoring script computes them through gan_bpm's own `CaseLoader` and `CheckpointPredictor`,
+  read-only. Each fold is reported, and the mean over folds; the paired difference is per
+  patient within a fold, averaged over folds, bootstrapped over patients. The fold maps are
+  never averaged into one map.
+- **Cost:** about 40 H100-hours of sampling (5 folds × 2 targets × about 4 h).
+- **Status:** decided (Carlos). `ctp_only_eval_plan.md` §6.1.
+
 ---
 
 ## Open

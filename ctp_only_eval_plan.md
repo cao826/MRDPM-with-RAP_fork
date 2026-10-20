@@ -25,11 +25,15 @@ is faithful.
     `splits/f13_isles24_ucla_k5.json`). MRDPM fold k against gan_bpm fold k on fold k's
     held-out patients. Every case is scored once, by models that never trained on it.
   - **External, ISLES 2018:** all 94 TRAINING scans (63 patients), as Zeng et al. used them. No
-    model trains on it. MRDPM's all-data models (§6) against gan_bpm's all-data models, which
-    stage 2 of gan_bpm's ISLES 2018 evaluation already scored.
+    model trains on it. Two comparisons (§6):
+    - **all-data:** MRDPM's all-data models against gan_bpm's, which stage 2 of gan_bpm's ISLES
+      2018 evaluation already scored;
+    - **fold models:** MRDPM fold k against gan_bpm fold k, each of the 5 on all 94 scans
+      (decisions #24).
 - **Every applicable gan_bpm row** (Carlos: their performance is about the same):
   - CV: λ_adv = 0, LSGAN and WGAN-GP, each fold's `best.pt`;
-  - ISLES 2018: the 6 all-data models at both snapshots (`epoch_<M>` and `last`), as stage 2.
+  - ISLES 2018, all-data: the 6 all-data models at both snapshots (`epoch_<M>` and `last`), as
+    stage 2; fold models: λ_adv = 0, LSGAN and WGAN-GP, each fold's `best.pt`.
   - On ISLES 2018, the reference (the shipped label) as the ceiling, and Zeng et al.'s published
     numbers. The CV's level-0 ladder (training median etc.) is a baseline, not a model; it is
     left out.
@@ -125,6 +129,24 @@ gan_bpm's `evaluation/metrics.py`, plus one metric defined on this side (PSNR fu
 
 ## 6. ISLES 2018
 
+Two comparisons on the same 94 scans, both scored by one script.
+
+### 6.1 The fold models (decisions #24)
+
+- **What:** each of MRDPM's 5 fold models, at epoch 200 with the EMA weights, on all 94 scans,
+  against gan_bpm's model of the same fold (λ_adv = 0, its own predictor; LSGAN and WGAN-GP as
+  context), each fold's `best.pt`. No leakage: no fold trained on ISLES 2018.
+- **gan_bpm's side:** its stage 1 saved maps for the all-data models only. The scoring script
+  computes the fold models' predictions itself, through gan_bpm's `CaseLoader` and
+  `CheckpointPredictor`, read-only (the generator runs at about 60 slices/s).
+- **Reported:** every metric per fold, and the mean over the 5 folds with the spread between
+  them. The paired difference MRDPM − gan_bpm is taken per patient within each fold, averaged
+  over the folds per patient, then bootstrapped over patients. The 5 maps are never averaged
+  into one: that would pull them toward the middle, as averaging samples would (§4).
+- **Cost:** about 4 h of H100 sampling per fold per target, so about 40 GPU-hours.
+
+### 6.2 The all-data models
+
 - **The models:** gan_bpm scores its all-data runs on ISLES 2018, so MRDPM has an **all-data
   model per target** (decided, §9.3; built, decisions #23): `config/ctp_only_f13_{tmax,rcbf}_all.json`,
   the fold-0 config trained on all 443 cases (gan_bpm's all-data `split.json`), no monitor, its
@@ -150,11 +172,12 @@ Each with checks and a negative control (the repo's rule). Nothing in gan_bpm ch
 1. **Testing with the EMA weights:** a switch in `Palette.test`. The EMA copy also needs its
    noise schedule set before sampling. (EMA averages parameters only; the model has no
    BatchNorm, so the copy is complete.)
-2. **An H100 test job** (`target`, fold or all, checkpoint, test root), syncing its maps to
-   `/radraid2` as the training job does.
+2. **An H100 test job** (`target`, fold or all, the test set: the fold's held-out cases or ISLES
+   2018), syncing its maps to `/radraid2` as the training job does.
 3. **`Out_` → stage-1 maps**, a script. It refuses a missing slice; a round trip of `GT_`
    through the same path must equal the dataset's label.
-4. **The CV scoring script** (§5) and **the ISLES 2018 scoring script** (§6), each with its
+4. **The CV scoring script** (§5) and **the ISLES 2018 scoring script** (§6: the fold models,
+   with gan_bpm's fold predictions computed in it, and the all-data models), each with its
    reproduction check.
 5. **ISLES 2018 on the H100:** the test root staged, and a `split.json` listing its 94 scans
    as `val_case_ids` (the all-data configs point at
@@ -174,6 +197,7 @@ Each with checks and a negative control (the repo's rule). Nothing in gan_bpm ch
 1. **EMA weights at test: yes.**
 2. **One sample per slice, as the paper's code does.** No averaging, no repeat-sample check.
 3. **All-data MRDPM runs for ISLES 2018: yes**, with gan_bpm's all-data λ_adv = 0
-   `epoch_<M>` as the predictor. The 5-fold models are compared with gan_bpm's in the CV.
+   `epoch_<M>` as the predictor. **The 5 fold models are also scored on ISLES 2018**, against
+   gan_bpm's fold models (§6.1, decisions #24), besides the CV.
 4. **No CSF region, and no gan_bpm edits for now.**
 5. **Every applicable gan_bpm row** (§1).
