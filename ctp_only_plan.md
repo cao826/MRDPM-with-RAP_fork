@@ -940,6 +940,13 @@ convolutions carry it to neighbouring voxels that the loss does count (§7.2's s
      (what the Condor jobs ask for), or `--workers 0`. Rerun pending.
 3. Stage rCBF on the H100 box.
 4. An rCBF debug run there, then the DAG.
+   - **Debug run passed 2026-10-20** (H100, job 1821496.0): one training step (loss 3.026 =
+     diff 3.023 + 0.1 × init 0.027, all finite), a monitor pass on 2 slices in 67 s, checkpoint
+     1; results in `/radraid2/colivares/mrdpm_ctp_only/runs/debug_ctp_only_f13_rcbf_fold0_261020_153917/`.
+     Monitor: MRDPM 2.00 rCBF against the predictor's 0.198 on the same slices, the untrained
+     U-Net's noise again (Tmax's debug run: 11.4 s against 1.45 s). The two slices have no holes
+     (`support_of_envelope` 1.0); ISLES'24 rCBF has none. First-epoch GPU peak 90.2 GiB, cuDNN's
+     benchmarking as for Tmax (§13 step 4).
 
 The rule of decisions #15 holds for rCBF too: write down the evaluation (MAE, rCBF < 0.3 Dice and
 volume, one number per patient, the paired comparison with gan_bpm) before any held-out fold is
