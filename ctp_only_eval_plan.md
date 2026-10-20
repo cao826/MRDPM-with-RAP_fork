@@ -169,11 +169,15 @@ Two comparisons on the same 94 scans, both scored by one script.
 
 Each with checks and a negative control (the repo's rule). Nothing in gan_bpm changes.
 
-1. **Testing with the EMA weights:** a switch in `Palette.test`. The EMA copy also needs its
-   noise schedule set before sampling. (EMA averages parameters only; the model has no
-   BatchNorm, so the copy is complete.)
-2. **An H100 test job** (`target`, fold or all, the test set: the fold's held-out cases or ISLES
-   2018), syncing its maps to `/radraid2` as the training job does.
+1. **Testing with the EMA weights: built 2026-10-20.** `test_ema` in Palette's config (on in all
+   four configs, test phase only, so training is unchanged); the EMA copy gets its own noise
+   schedule. (EMA averages parameters only; the model has no BatchNorm, so the copy is
+   complete.) Synthetic check: with a fixed seed, two netG tests give the same maps and the EMA
+   test other maps.
+2. **An H100 test job: built 2026-10-20,** `condor/ctp_only_test_h100.sub` (`run` = a training
+   run folder, which gives the target and fold; `testset` = `cv` or `isles18`; `mode`; `epoch`,
+   200). It copies the checkpoint to `/home`, samples there, and copies everything but the
+   `Process_` trajectories to `/radraid2/colivares/mrdpm_ctp_only/runs/test_…`.
 3. **`Out_` → stage-1 maps**, a script. It refuses a missing slice; a round trip of `GT_`
    through the same path must equal the dataset's label.
 4. **The CV scoring script** (§5) and **the ISLES 2018 scoring script** (§6: the fold models,

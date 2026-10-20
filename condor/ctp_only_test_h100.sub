@@ -1,0 +1,41 @@
+# MRDPM's maps for the evaluation (ctp_only_eval_plan.md §4-§6): run.py -p test on the H100 box
+# with a training run's checkpoint 200 and its EMA weights, one sample per slice. The target and
+# fold come from the run folder's name. About 6 h for a fold's held-out cases (about 790 slices),
+# about 4 h for ISLES 2018 (502 slices). The code is this checkout on 14958: git pull first.
+#
+#   cd condor && mkdir -p log
+#   R=/radraid2/colivares/mrdpm_ctp_only/runs/train_ctp_only_f13_tmax_fold0_261019_202928
+#   condor_submit ctp_only_test_h100.sub -append "run = $R"                          # debug: 4 slices
+#   condor_submit ctp_only_test_h100.sub -append "run = $R" -append 'mode = full'    # the fold's held-out cases
+#   condor_submit ctp_only_test_h100.sub -append "run = $R" -append 'mode = full' -append 'testset = isles18'
+#
+#   tail -f log/ctp_only_test_h100.<cluster>.0.out
+universe                = docker
+docker_image            = registry.cvib.ucla.edu/colivares:mrdpm-env-v1
+
+executable              = ctp_only_test_h100.sh
+arguments               = $(run:none) $(testset:cv) $(mode:debug) $(Cluster).$(Process) $(epoch:200)
+# No trailing slash: the checkout arrives in the workspace as MRDPM-with-RAP_fork/.
+transfer_input_files    = /raid/colivares/github_repos/MRDPM-with-RAP_fork
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT
+transfer_output_files   = job_summary.txt
+transfer_output_remaps  = "job_summary.txt = log/ctp_only_test_h100.$(cluster).$(process).summary"
+
+requirements            = (Machine == "$(gpu_host:REDLRADADM35838).ad.medctr.ucla.edu")
+# DataLoader workers hand batches over through /dev/shm.
++DevShmSize             = 8589934592
+
+request_gpus            = 1
+request_cpus            = 8
+request_memory          = 32G
+# The checkpoint, the data and the run folder are on /home; the workspace holds the code.
+request_disk            = 2G
+
+output                  = log/ctp_only_test_h100.$(cluster).$(process).out
+error                   = log/ctp_only_test_h100.$(cluster).$(process).err
+log                     = log/ctp_only_test_h100.$(cluster).$(process).log
+stream_output           = True
+stream_error            = True
+
+queue

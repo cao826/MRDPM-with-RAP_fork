@@ -79,6 +79,7 @@
             "args": {
                 "sample_num": 4,
                 "task": "my_mission_mask",
+                "test_ema": true, // the test phase samples with the EMA weights (ctp_only_eval_plan.md §4)
                 "ema_scheduler": {
                     "ema_start": 1,
                     "ema_iter": 1,

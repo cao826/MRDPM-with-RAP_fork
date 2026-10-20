@@ -708,6 +708,8 @@ def check_config(cfg, path=CONFIG, tmax_cfg=None):
     check("unet.in_channel = 3 phases + 1, n_phases 3", a["unet"]["in_channel"] == 4 and ip["n_phases"] == 3)
     check("U-Net at the generator's 512", a["unet"]["image_size"] == 512)
     check("mask_unet_cond is on", a["mask_unet_cond"] is True)
+    check("the test phase samples with the EMA weights (test_ema)",
+          cfg["model"]["which_model"]["args"].get("test_ema") is True)
     bs = cfg["datasets"]["train"]["dataloader"]["args"]["batch_size"]
     check("log_iter is a multiple of the batch size (iter counts samples)", cfg["train"]["log_iter"] % bs == 0)
     check("the debug cut is whole batches: the train loader drops an incomplete one",
@@ -935,6 +937,32 @@ def check_run_py(cfg, root, split, ckpt, state, gan_bpm, work, full=True):
               not missing and set(unexpected) <= schedule, f"missing {len(missing)}, unexpected {sorted(unexpected)}")
         check("test: so the predictor tested is the fine-tuned one, not gan_bpm's",
               same_weights(net.initial_net.G, pred) and not same_weights(net.initial_net.G, state))
+
+        # test_ema (ctp_only_eval_plan.md §4). With a fixed seed the sampling noise repeats, so the
+        # maps differ only through the weights. Each run gets its own name: folders are per second.
+        def test_maps(test_ema, tag):
+            t = copy.deepcopy(c)
+            t["seed"] = 7
+            t["name"] = f"{c['name']}_{tag}"
+            t["model"]["which_model"]["args"]["test_ema"] = test_ema
+            path = run_dir / f"test_{tag}.json"
+            path.write_text(json.dumps(t, indent=1))
+            o = Praser.parse(ap.Namespace(config=str(path), phase="test", batch=None, gpu_ids=None, debug=True,
+                                          port="21012"))
+            o["world_size"] = 1
+            run.main_worker(0, 1, o)
+            exp_t = Path(o["path"]["experiments_root"])
+            logs = "".join(f.read_text() for f in exp_t.glob("*.log"))
+            return {f.name: np.load(f) for f in sorted((exp_t / "results/test/0").glob("Out_*.npy"))}, logs
+        raw1, _ = test_maps(False, "raw1")
+        raw2, log_raw = test_maps(False, "raw2")
+        ema, log_ema = test_maps(True, "ema")
+        check("test_ema off: with a fixed seed, two tests give the same maps (the control)",
+              raw1 and raw1.keys() == raw2.keys() and all(np.array_equal(raw1[k], raw2[k]) for k in raw1)
+              and "sampling with the netG weights" in log_raw, f"{len(raw1)} maps")
+        check("test_ema on: the same seed gives other maps, from the EMA weights",
+              ema.keys() == raw1.keys() and any(not np.array_equal(ema[k], raw1[k]) for k in ema)
+              and "sampling with the EMA weights" in log_ema)
     finally:
         os.chdir(cwd)
         network.Network.set_new_noise_schedule = original

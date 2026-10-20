@@ -19,7 +19,8 @@ class EMA():
         return old * self.beta + (1 - self.beta) * new
 
 class Palette(BaseModel):
-    def __init__(self, networks, losses, sample_num, task, optimizers, ema_scheduler=None, health_log=None, **kwargs):
+    def __init__(self, networks, losses, sample_num, task, optimizers, ema_scheduler=None, health_log=None,
+                 test_ema=False, **kwargs):
         ''' must to init BaseModel with kwargs '''
         super(Palette, self).__init__(**kwargs)
 
@@ -56,6 +57,14 @@ class Palette(BaseModel):
         else:
             self.netG.set_loss(self.loss_fn)
             self.netG.set_new_noise_schedule(phase=self.phase)
+        # ctp_only_eval_plan.md §4: the test phase samples with the EMA copy (decisions #22). The
+        # copy was made before netG got its noise schedule, so it needs its own. Training is untouched.
+        self.test_ema = bool(test_ema) and self.phase == 'test'
+        if self.test_ema:
+            if self.ema_scheduler is None:
+                raise ValueError('test_ema needs ema_scheduler: there is no EMA copy to test')
+            ema_net = self.netG_EMA.module if self.opt['distributed'] else self.netG_EMA
+            ema_net.set_new_noise_schedule(phase=self.phase)
 
         ''' can rewrite in inherited class for more informations logging '''
         self.train_metrics = LogTracker(*[m.__name__ for m in losses], phase='train')
@@ -187,18 +196,20 @@ class Palette(BaseModel):
         return self.val_metrics.result()
 
     def test(self):
-        self.netG.eval()
+        net = self.netG_EMA if self.test_ema else self.netG
+        self.logger.info('test: sampling with the {} weights'.format('EMA' if self.test_ema else 'netG'))
+        net.eval()
         self.test_metrics.reset()
         with torch.no_grad():
             for phase_data in tqdm.tqdm(self.phase_loader):
                 self.set_input(phase_data)
                 if self.opt['distributed']:
                     if self.task in ['my_mission_mask']:
-                        self.output, self.visuals = self.netG.module.restoration(self.cond_image, y_t=self.cond_image, 
+                        self.output, self.visuals = net.module.restoration(self.cond_image, y_t=self.cond_image, 
                             y_0=self.gt_image, mask=self.mask, sample_num=self.sample_num,target=self.gt_image)
                 else:
                     if self.task in ['my_mission_mask']:
-                        self.output, self.visuals = self.netG.restoration(self.cond_image, y_t=self.cond_image, 
+                        self.output, self.visuals = net.restoration(self.cond_image, y_t=self.cond_image, 
                             y_0=self.gt_image, mask=self.mask, sample_num=self.sample_num,target=self.gt_image)
 
 

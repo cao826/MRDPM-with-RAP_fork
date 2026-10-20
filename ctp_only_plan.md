@@ -450,6 +450,7 @@ intermediate tensors. A check enforces that `y` is bitwise equal to `Generator.f
 | `models/network.py`, again | `zero_hole_residual`: the training residual × `loss_mask`, not `mask` (§18) | unchanged |
 | `config/ctp_only_f13_rcbf_fold0.json` | new: Tmax's config with only the label's keys changed (§18) | n/a |
 | `config/ctp_only_f13_{tmax,rcbf}_all.json` | new: the all-data models for ISLES 2018 (`ctp_only_eval_plan.md` §6, decisions #23) | n/a |
+| `models/model.py`, again | `test_ema`: the test phase samples with the EMA copy (`ctp_only_eval_plan.md` §4, decisions #22); on in the four configs | netG, as upstream |
 
 **Untouched:** the diffusion maths, the training loop, EMA, checkpointing and `run.py`.
 
