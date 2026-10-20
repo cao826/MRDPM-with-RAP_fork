@@ -86,7 +86,7 @@ The paper is `1246_paper.pdf` at the repo root (untracked). It describes the asy
 
 ## The ctp-only path (this branch)
 
-`ctp_only_plan.md` is the design record: what was verified, what was decided, what is still open. `ctp_only_decisions.md` lists every decision with its date: add an entry whenever one is made. `ctp_only_eval_plan.md` is how MRDPM is scored against gan_bpm (5-fold CV and ISLES 2018, through gan_bpm's own evaluation code); nothing held-out is scored until it is frozen. What exists so far:
+`ctp_only_plan.md` is the design record: what was verified, what was decided, what is still open. `ctp_only_decisions.md` lists every decision with its date: add an entry whenever one is made. `ctp_only_eval_plan.md` is how MRDPM is scored against gan_bpm (5-fold CV and ISLES 2018, through gan_bpm's own evaluation code); nothing held-out is scored until it is frozen. The newest `handoff_<date>.md` is the state at the end of the last session and its next steps. What exists so far:
 
 - **Config:** `config/ctp_only_f13_tmax_fold0.json`, f13's 3 CTP phases → Tmax on fold 0 of gan_bpm's k=5 split, with the GPU box's paths. `config/ctp_only_f13_rcbf_fold0.json` is the same for rCBF (`gt = clip(rCBF, 0, 2)/2`, gan_bpm's rCBF λ_adv = 0 generators) and may differ from it only in the label's keys (plan §18).
 - **Data:** `data/dataset.py:MCTPDataset_mask` reads the f13 root through gan_bpm's own `mctp` pipeline. gan_bpm's root is appended to `sys.path` at run time, so DataLoader workers must fork (Linux, not macOS). It returns the upstream dict plus `loss_mask` (gan_bpm's `support`). `cond_image` is deliberately **not** masked. `part` (train / monitor / test) comes from a gan_bpm fold's `split.json`.
