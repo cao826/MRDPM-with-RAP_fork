@@ -1,7 +1,7 @@
 # Folds 1-4 of the ctp-only Tmax model (ctp_only_plan.md §13 step 4), one at a time on one H100.
 # Each node is the fold-0 job, condor/ctp_only_train_h100.sub, with fold=k and mode=full: about
 # 20 h each, so about 3.5 days in all once they start. Results land in
-# /radraid2/colivares/mrdpm_ctp_only/runs/ctp_only_f13_tmax_fold<k>_<date_time>/.
+# /radraid2/colivares/mrdpm_ctp_only/runs/train_ctp_only_f13_tmax_fold<k>_<date_time>/.
 #
 #   cd /raid/colivares/github_repos/MRDPM-with-RAP_fork && git pull
 #   condor_q -run          # this account may hold 3 GPUs at once; going over gets jobs booted

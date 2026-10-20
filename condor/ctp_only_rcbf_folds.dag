@@ -1,6 +1,6 @@
 # Folds 0-4 of the ctp-only rCBF model (ctp_only_plan.md §18), on the H100 box. Each node is
 # condor/ctp_only_train_h100.sub with target=rcbf, fold=k and mode=full: about 20 h each.
-# Results land in /radraid2/colivares/mrdpm_ctp_only/runs/ctp_only_f13_rcbf_fold<k>_<date_time>/.
+# Results land in /radraid2/colivares/mrdpm_ctp_only/runs/train_ctp_only_f13_rcbf_fold<k>_<date_time>/.
 #
 # First, once: stage rCBF on the box (ctp_only_stage_home.sub -append 'target = rcbf') and pass
 # an rCBF debug run (ctp_only_train_h100.sub -append 'target = rcbf').
@@ -13,9 +13,11 @@
 #
 # HOW MANY AT ONCE
 # MAXJOBS h100 1 runs one fold at a time: about 4 days for the five. MAXJOBS counts only this
-# DAG's jobs, so with the Tmax folds' DAG (ctp_only_folds_1_4.dag, also 1 at a time) the account
-# holds 2 GPUs. If nothing else of yours holds one, 2 here is the most that stays under the cap
-# (about 2.5 days). `condor_submit_dag -maxjobs N` can only lower it, so edit the line below.
+# DAG's jobs. Count yours before raising it: Tmax fold 0 (submitted on its own) and the Tmax
+# folds' DAG (ctp_only_folds_1_4.dag, 1 at a time) each hold a GPU while they run, so with this
+# DAG at 1 the account holds 3, its cap. 2 here (about 2.5 days) fits only once both of those are
+# down to one GPU between them. `condor_submit_dag -maxjobs N` can only lower it, so edit the
+# line below.
 #
 # NO RETRY, as in ctp_only_folds_1_4.dag: a retried node would restart its fold from epoch 0. If
 # a node fails, DAGMan finishes the others and writes ctp_only_rcbf_folds.dag.rescue001. Resume

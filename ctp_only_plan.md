@@ -919,7 +919,11 @@ convolutions carry it to neighbouring voxels that the loss does count (§7.2's s
   mask cache, which is keyed by input content. It changes nothing of Tmax's, so it can run while
   Tmax trains. (Rerunning the Tmax staging still replaces gan_bpm's code: never while a job runs.)
 - `condor/ctp_only_rcbf_folds.dag`: folds 0–4, one at a time (`MAXJOBS h100 1`, about 4 days).
-  Beside the Tmax DAG that makes 2 GPUs; 2 here would be the account's cap of 3.
+  While Tmax fold 0 (on its own) and the Tmax folds' DAG both run, that makes 3 GPUs, the
+  account's cap; 2 here fits only after Tmax fold 0 ends. Run folders are
+  `runs/train_ctp_only_f13_<target>_fold<k>_<date_time>/` (`run.py` prefixes the phase).
+  - **Submitted 2026-10-20:** fold 0 started at 15:49 (`train_ctp_only_f13_rcbf_fold0_261020_154916`),
+    beside Tmax folds 0 and 1.
 
 **Order.**
 

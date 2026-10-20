@@ -245,6 +245,8 @@ The reasoning, measurements and code details live in `ctp_only_plan.md` (the § 
   generators, could break them. One at a time keeps the account at 2 of its 3 GPUs.
 - **Alternatives:** 2 folds at a time (about 2.5 days instead of 4), if nothing else of Carlos's
   holds a GPU.
+- **Correction (2026-10-20):** "2 of its 3" left out Tmax fold 0, submitted on its own. While it
+  runs, Tmax holds 2 GPUs and this DAG the third. 2 at a time fits only after it ends.
 - **Status:** adopted. Plan §18.
 
 ---
