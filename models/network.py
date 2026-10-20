@@ -10,7 +10,8 @@ from torchviz import make_dot
 from .networks_unet256 import define_G
 import pydot_ng
 class Network(BaseNetwork):
-    def __init__(self, unet, beta_schedule, module_name='sr3', initial_predictor=None, mask_unet_cond=False, **kwargs):
+    def __init__(self, unet, beta_schedule, module_name='sr3', initial_predictor=None, mask_unet_cond=False,
+                 zero_hole_residual=False, **kwargs):
         super(Network, self).__init__(**kwargs)
 
         from .guided_diffusion_modules.unet import UNet
@@ -28,6 +29,9 @@ class Network(BaseNetwork):
             raise NotImplementedError('initial_predictor type [{}] is not implemented'.format(initial_predictor['type']))
         # ctp_only_plan.md §7.1: the predictor reads the whole condition, the U-Net only its masked copy
         self.mask_unet_cond = mask_unet_cond
+        # ctp_only_plan.md §18: in training, the residual is 0 at no-data voxels (mask, not loss_mask),
+        # so the U-Net's noisy input there is noise only, not the clipped label minus y_initial
+        self.zero_hole_residual = zero_hole_residual
         self.beta_schedule = beta_schedule
         self.module_name = module_name
         # ...
@@ -199,7 +203,7 @@ class Network(BaseNetwork):
 
         y_initial,init_cond = self.initial_net(y_cond)
         y_initial = y_initial*mask
-        y_res = (y_0 - y_initial)*mask
+        y_res = (y_0 - y_initial)*(loss_mask if self.zero_hole_residual and loss_mask is not None else mask)
 
         noise = default(noise, lambda: torch.randn_like(y_0))
         y_noisy = self.q_sample(

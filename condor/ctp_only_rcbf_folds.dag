@@ -1,0 +1,45 @@
+# Folds 0-4 of the ctp-only rCBF model (ctp_only_plan.md §18), on the H100 box. Each node is
+# condor/ctp_only_train_h100.sub with target=rcbf, fold=k and mode=full: about 20 h each.
+# Results land in /radraid2/colivares/mrdpm_ctp_only/runs/ctp_only_f13_rcbf_fold<k>_<date_time>/.
+#
+# First, once: stage rCBF on the box (ctp_only_stage_home.sub -append 'target = rcbf') and pass
+# an rCBF debug run (ctp_only_train_h100.sub -append 'target = rcbf').
+#
+#   cd /raid/colivares/github_repos/MRDPM-with-RAP_fork && git pull
+#   condor_q -run          # this account may hold 3 GPUs at once; going over gets jobs booted
+#   cd condor && mkdir -p log && condor_submit_dag ctp_only_rcbf_folds.dag
+#   condor_q -dag
+#   tail -f ctp_only_rcbf_folds.dag.dagman.out
+#
+# HOW MANY AT ONCE
+# MAXJOBS h100 1 runs one fold at a time: about 4 days for the five. MAXJOBS counts only this
+# DAG's jobs, so with the Tmax folds' DAG (ctp_only_folds_1_4.dag, also 1 at a time) the account
+# holds 2 GPUs. If nothing else of yours holds one, 2 here is the most that stays under the cap
+# (about 2.5 days). `condor_submit_dag -maxjobs N` can only lower it, so edit the line below.
+#
+# NO RETRY, as in ctp_only_folds_1_4.dag: a retried node would restart its fold from epoch 0. If
+# a node fails, DAGMan finishes the others and writes ctp_only_rcbf_folds.dag.rescue001. Resume
+# that fold by hand from its last checkpoint on /radraid2 (ctp_only_train_h100.sub's header,
+# with -append 'target = rcbf'), or fix the cause and run the same condor_submit_dag again.
+
+JOB      RCBF0  ctp_only_train_h100.sub
+VARS     RCBF0  fold="0" mode="full" target="rcbf"
+CATEGORY RCBF0  h100
+
+JOB      RCBF1  ctp_only_train_h100.sub
+VARS     RCBF1  fold="1" mode="full" target="rcbf"
+CATEGORY RCBF1  h100
+
+JOB      RCBF2  ctp_only_train_h100.sub
+VARS     RCBF2  fold="2" mode="full" target="rcbf"
+CATEGORY RCBF2  h100
+
+JOB      RCBF3  ctp_only_train_h100.sub
+VARS     RCBF3  fold="3" mode="full" target="rcbf"
+CATEGORY RCBF3  h100
+
+JOB      RCBF4  ctp_only_train_h100.sub
+VARS     RCBF4  fold="4" mode="full" target="rcbf"
+CATEGORY RCBF4  h100
+
+MAXJOBS  h100  1

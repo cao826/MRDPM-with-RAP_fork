@@ -1,7 +1,7 @@
 """gan_bpm's generator as MRDPM's initial predictor (ctp_only_plan.md §8).
 
-`GanBpmInitialPredictor` puts gan_bpm's `Generator` (3 CTP phases -> Tmax) behind BRAN's
-interface, in MRDPM's [0, 1] space:
+`GanBpmInitialPredictor` puts gan_bpm's `Generator` (3 CTP phases -> Tmax or rCBF) behind
+BRAN's interface, in MRDPM's [0, 1] space:
 
     cond01 (N, 3, H, W) -> y01 (N, 1, H, W),
                            hs = [(N, 64, H/2, W/2), (N, 128, H/4, W/4), (N, 256, H/8, W/8)]
@@ -20,6 +20,15 @@ import torch.nn as nn
 # What the checkpoint's own config must say. Under anything else `(y + 1) / 2` is not
 # Tmax / 12 s, e.g. a 40 s ceiling (`tmax_ceiling: None`) would make it Tmax / 40 (§8.3).
 EXPECTED_CONFIG = {"target": "tmax", "tmax_ceiling": 12.0, "n_phases": 3, "label_transform": "linear"}
+
+
+def expected_config(target="tmax", tmax_ceiling=12.0, n_phases=3):
+    """EXPECTED_CONFIG for `target`. rCBF's bounds are (0, 2) whatever the ceiling says (gan_bpm's
+    `label_bounds`), so only a Tmax checkpoint's ceiling is checked: `(y + 1) / 2` = rCBF / 2."""
+    expect = {"target": target, "n_phases": n_phases, "label_transform": "linear"}
+    if target == "tmax":
+        expect["tmax_ceiling"] = tmax_ceiling
+    return expect
 
 
 def load_generator_module(gan_bpm_root):
@@ -58,10 +67,10 @@ def read_checkpoint(path, expect=EXPECTED_CONFIG):
 
 
 class GanBpmInitialPredictor(nn.Module):
-    def __init__(self, gan_bpm_root, checkpoint, n_phases=3, expect_fold=None):
+    def __init__(self, gan_bpm_root, checkpoint, n_phases=3, expect_fold=None, target="tmax", tmax_ceiling=12.0):
         super().__init__()
         self.checkpoint = str(checkpoint)
-        self.expect = dict(EXPECTED_CONFIG, n_phases=n_phases)
+        self.expect = expected_config(target, tmax_ceiling, n_phases)
         if expect_fold is not None:
             self.expect["fold"] = expect_fold
         self.G = load_generator_module(gan_bpm_root).Generator(n_phases=n_phases)

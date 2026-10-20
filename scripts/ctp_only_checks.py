@@ -1,10 +1,11 @@
 """ctp_only_plan.md §12: CPU checks of the ctp-only pieces, on synthetic data.
 
 Builds a small fake f13 root (three datasets, a skull, no-data holes, one patient with two
-cases) and fake gan_bpm checkpoints in a temp dir. Then it checks the dataset, the
-`which_val_dataset` hook, the gan_bpm predictor, Network's conditioning and loss masks, the
-U-Net's `mirror_hs` switch and the config, and runs run.py's train (debug) and test phases end to end on the CPU. Checks
-marked "negative control" show that the check above them can fail.
+cases; Tmax and rCBF labels on the same inputs) and fake gan_bpm checkpoints in a temp dir. Then
+it checks the dataset, the `which_val_dataset` hook, the gan_bpm predictor, Network's
+conditioning and loss masks, the U-Net's `mirror_hs` switch, `zero_hole_residual` and both
+configs, and runs run.py's train (debug) and test phases end to end on the CPU, Tmax's and
+(train only) rCBF's. Checks marked "negative control" show that the check above them can fail.
 
     python scripts/ctp_only_checks.py [--gan-bpm PATH] [--keep DIR]
 
@@ -35,8 +36,10 @@ import torch
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))       # MRDPM's `models` and `data` must win over gan_bpm's
 CONFIG = REPO / "config/ctp_only_f13_tmax_fold0.json"
+CONFIG_RCBF = REPO / "config/ctp_only_f13_rcbf_fold0.json"
 H = 256                             # gan_bpm's generator needs H, W >= 256
 MARKERS = {"isles24": -30.0, "ucla_evt": -1.0, "ucla_neg": -1.0}    # each dataset's no-data value
+RCBF_MARKERS = {"isles24": None, "ucla_evt": -1.0, "ucla_neg": -1.0}  # ISLES'24 rCBF has none
 
 RESULTS = []
 
@@ -65,9 +68,9 @@ class Log:
     warning = info
 
 
-def load_config():
+def load_config(path=CONFIG):
     """The config as core/praser.py reads it: everything from `//` to the end of a line goes."""
-    return json.loads("".join(line.split("//")[0] + "\n" for line in CONFIG.open()))
+    return json.loads("".join(line.split("//")[0] + "\n" for line in Path(path).open()))
 
 
 def same_weights(module, state):
@@ -78,13 +81,18 @@ def same_weights(module, state):
 # ---------------------------------------------------------------- fixtures
 
 def make_root(root):
-    """4 cases x 2 slices per dataset, raw HU and raw Tmax as on disk, plus the slice index."""
+    """4 cases x 2 slices per dataset, raw HU and raw Tmax as on disk, plus the slice index.
+
+    rCBF as the builder writes it beside Tmax: its own copy of the same input, its own label and
+    index. UCLA's no-data voxels are -1; ISLES'24 rCBF has no marker.
+    """
     import pandas as pd
     rng = np.random.default_rng(0)
+    rng_rcbf = np.random.default_rng(1)     # its own, so the Tmax fixture is what it always was
     yy, xx = np.mgrid[:H, :H]
     r = np.hypot(yy - H / 2, xx - H / 2 + 8)
     brain = r < 92
-    rows = []
+    rows, rows_rcbf = [], []
     for name, marker in MARKERS.items():
         for i in range(4):
             case = f"{name}-{i}"
@@ -103,7 +111,20 @@ def make_root(root):
                 np.save(root / rel_l, lab)
                 rows.append(dict(case_id=case, patient_id=patient, dataset=name, slice_idx=s,
                                  input_relpath=rel_i, label_relpath=rel_l, label_fg_frac=0.5))
+
+                fill = RCBF_MARKERS[name]
+                lab = np.full((H, H), 0.0 if fill is None else fill, np.float32)
+                lab[brain] = 2.4 * rng_rcbf.random(int(brain.sum()), dtype=np.float32)   # some > 2
+                if fill is not None:
+                    lab[brain & (xx < 70 + 10 * s)] = fill                    # a no-data hole
+                lab[brain & (yy < 60)] = 0.0                                  # dead tissue stays
+                rel_i, rel_l = (f"rcbf/{case}/slice{s:03d}_{k}.npy" for k in ("input", "label"))
+                (root / rel_i).parent.mkdir(parents=True, exist_ok=True)
+                np.save(root / rel_i, img)
+                np.save(root / rel_l, lab)
+                rows_rcbf.append(dict(rows[-1], input_relpath=rel_i, label_relpath=rel_l))
     pd.DataFrame(rows).to_parquet(root / "tmax_index.parquet")
+    pd.DataFrame(rows_rcbf).to_parquet(root / "rcbf_index.parquet")
 
 
 def write_split(path, train, val):
@@ -113,14 +134,17 @@ def write_split(path, train, val):
 
 
 def make_checkpoints(d, gan_bpm, data_root):
-    """One good gan_bpm-style checkpoint and five whose config the predictor must refuse."""
+    """A good Tmax checkpoint and five whose config the Tmax predictor must refuse; a good rCBF one
+    (gan_bpm stores 40 as an rCBF run's unused ceiling) and an rCBF one it must refuse."""
     from models.gan_bpm_predictor import load_generator_module
     torch.manual_seed(0)
     state = load_generator_module(gan_bpm).Generator(n_phases=3).state_dict()
     good = {"target": "tmax", "tmax_ceiling": 12.0, "n_phases": 3, "label_transform": "linear",
             "fold": 0, "lambda_adv": 0.0, "data_root": str(data_root)}
     bad = {"good": {}, "ceiling40": {"tmax_ceiling": None}, "phases4": {"n_phases": 4},
-           "rcbf": {"target": "rcbf"}, "sqrt": {"label_transform": "sqrt"}, "fold1": {"fold": 1}}
+           "rcbf": {"target": "rcbf"}, "sqrt": {"label_transform": "sqrt"}, "fold1": {"fold": 1},
+           "rcbf_good": {"target": "rcbf", "tmax_ceiling": 40.0},
+           "rcbf_sqrt": {"target": "rcbf", "tmax_ceiling": 40.0, "label_transform": "sqrt"}}
     paths = {}
     for name, change in bad.items():
         paths[name] = d / f"{name}.pt"
@@ -254,6 +278,42 @@ def check_dataset(root, split, gan_bpm, work):
     return parts
 
 
+def check_dataset_rcbf(root, split, gan_bpm, tmax_parts):
+    print("\ndataset, rCBF: MCTPDataset_mask with label_type rcbf (§18)")
+    from data.dataset import MCTPDataset_mask
+    from mctp.brain_mask import brain_mask_from_input
+
+    args = dict(mctp_root=str(root), gan_bpm_root=str(gan_bpm), split_json=str(split), label_type="rcbf")
+    parts = {p: MCTPDataset_mask(part=p, **args) for p in ("train", "monitor", "test")}
+    keys = ["case_id", "slice_idx"]
+    check("each part has Tmax's slices, in Tmax's order (same split, same monitor carve)",
+          all(parts[p].ds.rows[keys].reset_index(drop=True).equals(tmax_parts[p].ds.rows[keys].reset_index(drop=True))
+              for p in parts))
+    test, ttest = parts["test"], tmax_parts["test"]
+    worst = dict(gt=0.0, gt12=np.inf)
+    exact = dict(loss_mask=True, input=True)
+    holes = dead = False
+    for i in range(len(test)):
+        item, titem = test[i], ttest[i]
+        row = test.ds.rows.iloc[i]
+        lab = np.load(root / row["label_relpath"]).astype(np.float64)
+        env = np.asarray(brain_mask_from_input(np.load(root / row["input_relpath"]))).astype(bool)
+        g, lm = item["gt_image"][0].double().numpy(), item["loss_mask"][0].numpy().astype(bool)
+        worst["gt"] = max(worst["gt"], np.abs(g - np.clip(lab, 0, 2) / 2 * env).max())
+        worst["gt12"] = min(worst["gt12"], np.abs(g - np.clip(lab, 0, 12) / 12 * env).max())
+        exact["loss_mask"] &= np.array_equal(lm, env & (lab > -0.5))
+        exact["input"] &= torch.equal(item["cond_image"], titem["cond_image"]) and torch.equal(item["mask"], titem["mask"])
+        holes |= bool((env & ~(lab > -0.5)).any())
+        dead |= bool((lm & (lab == 0)).any())
+    check("gt = clip(rCBF, 0, 2)/2 × envelope from the raw label", worst["gt"] < 1e-6, f"{worst['gt']:.1e}")
+    check("  negative control: Tmax's 12 s scale does not match", worst["gt12"] > 1e-2, f"{worst['gt12']:.2f}")
+    check("loss_mask = envelope ∧ (raw rCBF > −0.5): UCLA's −1 leaves it, exactly", exact["loss_mask"])
+    check("  negative control: the fixture has rCBF holes", holes)
+    check("rCBF 0 (dead tissue) stays in loss_mask", dead)
+    check("cond and mask are Tmax's, exactly: the same input, the same envelope", exact["input"])
+    return parts
+
+
 def check_val_hook(root, split, gan_bpm, parts):
     print("\nwhich_val_dataset: data/__init__.py define_dataset")
     from core.praser import dict_to_nonedict
@@ -314,6 +374,22 @@ def check_stage(root, split, gan_bpm, work):
           and all((both / f).is_file() for f in list(in_split["input_relpath"]) + list(in_split["label_relpath"]))
           and "copied 0.0 GB" in again.stdout, again.stdout.strip()[-90:])
 
+    # condor/ctp_only_stage_home.sh, target rcbf: into the root that already holds Tmax's copy.
+    tmax_index = (both / "tmax_index.parquet").read_bytes()
+    tmax_files = {f: (both / f).stat().st_mtime_ns for f in in_split["input_relpath"]}
+    rc = subprocess.run(cmd + ["--label-type", "rcbf"], capture_output=True, text=True)
+    same = rc.returncode == 0
+    for label in ("tmax", "rcbf") if same else ():
+        a, b = (MCTPDataset_mask(mctp_root=str(r), part="test", gan_bpm_root=str(gan_bpm), split_json=str(split),
+                                 label_type=label) for r in (root, both))
+        same &= len(a) == len(b) and all(torch.equal(a[i][k], b[i][k]) for i in range(len(a))
+                                         for k in ("cond_image", "gt_image", "mask", "loss_mask"))
+    check("staging rCBF beside Tmax: both labels' items from the copy equal the original's",
+          same, (rc.stdout + rc.stderr).strip().replace("\n", " | ")[-120:])
+    check("  and Tmax's index and files are untouched",
+          (both / "tmax_index.parquet").read_bytes() == tmax_index
+          and all((both / f).stat().st_mtime_ns == t for f, t in tmax_files.items()))
+
 
 def check_predictor(ckpts, state, gan_bpm, cfg):
     print("\npredictor: models/gan_bpm_predictor.py")
@@ -354,6 +430,15 @@ def check_predictor(ckpts, state, gan_bpm, cfg):
           raises(lambda: GanBpmInitialPredictor(gan_bpm, ckpts["fold1"], expect_fold=0), ValueError))
     check("  negative control: without expect_fold it loads",
           not raises(lambda: GanBpmInitialPredictor(gan_bpm, ckpts["fold1"])))
+    R = GanBpmInitialPredictor(gan_bpm, ckpts["rcbf_good"], expect_fold=0, target="rcbf")
+    check("target rcbf: an rCBF checkpoint (its stored ceiling 40) loads strict, provenance says rcbf",
+          same_weights(R.G, state) and R.provenance["target"] == "rcbf")
+    check("  the ceiling isn't checked for rCBF: one stored at 12 loads too",
+          not raises(lambda: GanBpmInitialPredictor(gan_bpm, ckpts["rcbf"], target="rcbf")))
+    check("target rcbf refuses the Tmax checkpoint",
+          raises(lambda: GanBpmInitialPredictor(gan_bpm, ckpts["good"], target="rcbf"), ValueError))
+    check("target rcbf refuses an rCBF sqrt checkpoint",
+          raises(lambda: GanBpmInitialPredictor(gan_bpm, ckpts["rcbf_sqrt"], target="rcbf"), ValueError))
 
     print("\npredictor inside Network: initialization order (§8.4)")
     from core.base_network import BaseNetwork
@@ -516,10 +601,81 @@ def check_mirror(parts, ckpts, gan_bpm, cfg):
           f"{losses['on']:.6f} vs {losses['off']:.6f}")
 
 
-def check_config(cfg):
-    print("\nconfig: config/ctp_only_f13_tmax_fold0.json")
+def check_holes(parts, ckpts, gan_bpm, cfg):
+    print("\nNetwork: zero_hole_residual (§18), with the rCBF config and its data")
+    import models.loss
+    from torch.utils.data.dataloader import default_collate
+    from models import define_network
+    opt = network_opt(cfg, gan_bpm, ckpts["rcbf_good"])
+    check("the rCBF config turns it on", opt["args"].get("zero_hole_residual") is True)
+    net = define_network(Log(), {"phase": "train"}, opt)
+    net.set_loss(models.loss.mse_loss)
+    net.set_new_noise_schedule(device=torch.device("cpu"), phase="train")
+    net.eval()                       # no dropout: the comparisons below need a repeatable U-Net
+    test = parts["test"]
+    with_holes = [i for i in range(len(test)) if bool((test[i]["mask"] > test[i]["loss_mask"]).any())][:2]
+    b = default_collate([test[i] for i in with_holes])
+    gt, cond, mask, lm = b["gt_image"], b["cond_image"], b["mask"], b["loss_mask"]
+    hole, valid = (mask - lm).bool(), lm.bool()
+    check("  the batch has holes", len(with_holes) == 2 and bool(hole.any()))
+    gt_hole = gt.clone()
+    gt_hole[hole] = 0.9
+    noise = torch.randn_like(gt)
+    seen = []
+    hook = net.denoise_fn.register_forward_pre_hook(lambda m, a: seen.append((a[0][:, -1:].clone(), a[1].clone())))
+
+    def run(g, loss_mask=lm):
+        torch.manual_seed(0)         # the same t
+        with torch.no_grad():
+            loss = net(g, cond, mask=mask, noise=noise, loss_mask=loss_mask).item()
+        return loss, seen[-1][0], seen[-1][1]
+
+    (l_on, x_on, gam), (l_on2, x_on2, _) = run(gt), run(gt_hole)
+    want = (1 - gam.view(-1, 1, 1, 1)).sqrt() * noise
+    check("at a hole, the U-Net's noisy input is the noise alone, sqrt(1 − γ)·ε",
+          torch.allclose(x_on[hole], want[hole], rtol=0, atol=1e-7))
+    check("gt in the holes changes neither the U-Net's input nor the loss (the real U-Net)",
+          torch.equal(x_on, x_on2) and l_on == l_on2, f"{l_on:.6f}")
+    net.zero_hole_residual = False
+    (l_off, x_off, _), (l_off2, x_off2, _) = run(gt), run(gt_hole)
+    check("  negative control: off, gt in the holes reaches the input and, through the U-Net, the loss",
+          not torch.equal(x_off, x_off2) and l_off != l_off2, f"{l_off:.6f} vs {l_off2:.6f}")
+    check("on or off, the input where the label is valid is the same", torch.equal(x_on[valid], x_off[valid]))
+    no_mask = run(gt, None)[0]
+    net.zero_hole_residual = True
+    check("without loss_mask it does nothing (nothing says where the holes are)", run(gt, None)[0] == no_mask)
+    hook.remove()
+
+
+ABSENT = object()
+
+
+def config_diff(a, b, path=""):
+    """The paths where two parsed configs differ."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        for k in sorted(set(a) | set(b)):
+            yield from config_diff(a.get(k, ABSENT), b.get(k, ABSENT), f"{path}.{k}" if path else k)
+    elif isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+        for i, (x, y) in enumerate(zip(a, b)):
+            yield from config_diff(x, y, f"{path}[{i}]")
+    elif a != b:
+        yield path
+
+
+# What may differ between the rCBF config and Tmax's: the label's keys, nothing of the recipe (§18).
+RCBF_KEYS = ["name", "datasets.*.args.split_json", "datasets.*.args.label_type",
+             "model.which_model.args.health_log.label_scale", "model.which_model.args.health_log.unit",
+             "model.which_networks[[]0[]].args.initial_predictor.checkpoint",
+             "model.which_networks[[]0[]].args.initial_predictor.target",
+             "model.which_networks[[]0[]].args.zero_hole_residual"]
+
+
+def check_config(cfg, path=CONFIG, tmax_cfg=None):
+    print(f"\nconfig: {path.relative_to(REPO)}")
+    import fnmatch
     import inspect
     from data.dataset import MCTPDataset_mask
+    from mctp.label_scale import label_bounds
     a = cfg["model"]["which_networks"][0]["args"]
     ip = a["initial_predictor"]
     tr, mo, te = (cfg["datasets"][p][k]["args"] for p, k in
@@ -534,6 +690,10 @@ def check_config(cfg):
     check("the checkpoint is the split's fold: fold_k/split.json, fold_k/checkpoints/best.pt",
           ckpt.parent.parent == split.parent and ckpt.parent.name == "checkpoints")
     check("expect_fold is that fold", ip.get("expect_fold") == int(split.parent.name.rsplit("_", 1)[-1]))
+    label = tr["label_type"]
+    check("the predictor's target is the datasets' label, and its gan_bpm run is that label's",
+          ip.get("target", "tmax") == label and split.parent.parent.name.startswith(f"gan_bpm_{label}_"),
+          f"{label}, {split.parent.parent.name}")
     check("predictor and datasets read the same gan_bpm checkout", ip["gan_bpm_root"] == tr["gan_bpm_root"])
     check("unet.in_channel = 3 phases + 1, n_phases 3", a["unet"]["in_channel"] == 4 and ip["n_phases"] == 3)
     check("U-Net at the generator's 512", a["unet"]["image_size"] == 512)
@@ -543,12 +703,26 @@ def check_config(cfg):
     check("the debug cut is whole batches: the train loader drops an incomplete one",
           cfg["debug"]["debug_split"] % bs == 0 and cfg["datasets"]["train"]["dataloader"]["args"]["drop_last"])
     hl = cfg["model"]["which_model"]["args"].get("health_log") or {}
-    check("health log on, errors in seconds (label_scale = tmax_ceiling)",
-          hl.get("label_scale") == tr["tmax_ceiling"] and hl.get("unit") == "s")
+    lo, hi = label_bounds(label, tr["tmax_ceiling"])
+    unit = {"tmax": "s", "rcbf": "rCBF"}[label]
+    check(f"health log on, errors in {unit} (label_scale = the label's range, {hi - lo:g})",
+          hl.get("label_scale") == hi - lo and hl.get("unit") == unit)
+    if tmax_cfg is None:
+        check("zero_hole_residual is off: the Tmax recipe as it trains", not a.get("zero_hole_residual"))
+        return
+    extra = [d for d in config_diff(tmax_cfg, cfg) if not any(fnmatch.fnmatchcase(d, k) for k in RCBF_KEYS)]
+    check("it is Tmax's config except for the label's keys", not extra, ", ".join(extra))
+    changed = copy.deepcopy(cfg)
+    changed["datasets"]["train"]["dataloader"]["args"]["batch_size"] = 2
+    caught = [d for d in config_diff(tmax_cfg, changed) if not any(fnmatch.fnmatchcase(d, k) for k in RCBF_KEYS)]
+    check("  negative control: a changed batch size is caught", caught == ["datasets.train.dataloader.args.batch_size"])
 
 
-def check_run_py(cfg, root, split, ckpts, state, gan_bpm, work):
-    print("\nrun.py end to end on the CPU: train -d, then test -d")
+def check_run_py(cfg, root, split, ckpt, state, gan_bpm, work, full=True):
+    """run.py train -d with `cfg`; with `full`, also a resume and test -d."""
+    label = cfg["datasets"]["train"]["which_dataset"]["args"]["label_type"]
+    unit = cfg["model"]["which_model"]["args"]["health_log"]["unit"]
+    print(f"\nrun.py end to end on the CPU, {label}: train -d" + (", resume, then test -d" if full else ""))
     import argparse as ap
     import core.praser as Praser
     import models.network as network
@@ -567,11 +741,12 @@ def check_run_py(cfg, root, split, ckpts, state, gan_bpm, work):
         for k in ("args", "val_args"):
             if k in c["datasets"][p]["dataloader"]:
                 c["datasets"][p]["dataloader"][k]["num_workers"] = 0     # macOS workers spawn
-    c["model"]["which_networks"] = [network_opt(c, gan_bpm, ckpts["good"])]
+    c["model"]["which_networks"] = [network_opt(c, gan_bpm, ckpt)]
     for p in ("train", "test"):
         c["model"]["which_networks"][0]["args"]["beta_schedule"][p]["n_timestep"] = 5
-    (work / "run").mkdir(exist_ok=True)
-    train_cfg = work / "run/train.json"
+    run_dir = work / f"run_{label}"
+    run_dir.mkdir(exist_ok=True)
+    train_cfg = run_dir / "train.json"
     train_cfg.write_text(json.dumps(c, indent=1))
 
     # Palette builds the noise schedule on 'cuda' unless told otherwise.
@@ -579,7 +754,7 @@ def check_run_py(cfg, root, split, ckpts, state, gan_bpm, work):
     network.Network.set_new_noise_schedule = (
         lambda self, device=torch.device("cpu"), phase="train": original(self, device=device, phase=phase))
     cwd = os.getcwd()
-    os.chdir(work / "run")           # run.py's cwd holds ./tmax_net_G.pth and ./ddim_test.txt
+    os.chdir(run_dir)                # run.py's cwd holds ./tmax_net_G.pth and ./ddim_test.txt
     try:
         args = ap.Namespace(config=str(train_cfg), phase="train", batch=None, gpu_ids=None, debug=True, port="21012")
         opt = Praser.parse(args)
@@ -599,16 +774,16 @@ def check_run_py(cfg, root, split, ckpts, state, gan_bpm, work):
               len(outs) == 2 and all(o.shape == (H, H) and np.isfinite(o).all() and not o[m == 0].any()
                                      for o, m in zip(outs, masks)))
         log = (exp / "train.log").read_text()
-        check("train.log names the predictor's checkpoint", "Initial predictor loaded from" in log and str(ckpts["good"]) in log)
+        check("train.log names the predictor's checkpoint", "Initial predictor loaded from" in log and str(ckpt) in log)
         rows = read_csv(exp / "health/train.csv")
         check("health: train.csv has epoch 1 with the loss terms, gradient norm and LR, all finite",
               len(rows) == 1 and rows[0]["epoch"] == "1" and rows[0]["steps"] == "1" and all(
                   math.isfinite(float(rows[0][k])) for k in ("loss", "loss_diff", "loss_init", "grad_norm_max", "lr")),
               str(rows[0] if rows else None)[:120])
         mon = read_csv(exp / "health/monitor.csv")
-        check("health: monitor.csv has the epoch-1 pass, errors in seconds for MRDPM and the predictor alone",
-              len(mon) == 1 and mon[0]["slices"] == "2" and all(
-                  math.isfinite(float(mon[0][k])) for k in ("mae_output_s", "mae_predictor_s", "support_of_envelope")),
+        check(f"health: monitor.csv has the epoch-1 pass, errors in {unit} for MRDPM and the predictor alone",
+              len(mon) == 1 and mon[0]["slices"] == "2" and all(math.isfinite(float(mon[0][k])) for k in (
+                  f"mae_output_{unit}", f"mae_predictor_{unit}", "support_of_envelope")),
               str(mon[0] if mon else None)[:120])
         check("health: the monitor panel", (exp / "health/monitor_e001.png").is_file()
               or importlib.util.find_spec("matplotlib") is None)
@@ -616,12 +791,14 @@ def check_run_py(cfg, root, split, ckpts, state, gan_bpm, work):
         pred = {k[len("initial_net.G."):]: v for k, v in saved.items() if k.startswith("initial_net.G.")}
         check("train: the predictor was fine-tuned, its weights moved",
               pred.keys() == state.keys() and not all(torch.equal(pred[k], state[k]) for k in state))
+        if not full:
+            return
 
         # Resume from checkpoint 1 for one more epoch: the LR schedule must continue from epoch 1.
         resumed = copy.deepcopy(c)
         resumed["path"]["resume_state"] = str(ck / "1")
         resumed["debug"]["n_epoch"] = 1
-        resume_cfg = work / "run/resume.json"
+        resume_cfg = run_dir / "resume.json"
         resume_cfg.write_text(json.dumps(resumed, indent=1))
         args = ap.Namespace(config=str(resume_cfg), phase="train", batch=None, gpu_ids=None, debug=True, port="21012")
         opt = Praser.parse(args)
@@ -634,7 +811,7 @@ def check_run_py(cfg, root, split, ckpts, state, gan_bpm, work):
               and len(rrows) == 1 and rrows[0]["epoch"] == "2" and rrows[0]["lr_epoch"] == "1",
               str({k: rrows[0][k] for k in ("epoch", "lr", "lr_epoch")} if rrows else None))
 
-        test_cfg = work / "run/test.json"
+        test_cfg = run_dir / "test.json"
         c["path"]["resume_state"] = str(ck / "1")
         test_cfg.write_text(json.dumps(c, indent=1))
         args = ap.Namespace(config=str(test_cfg), phase="test", batch=None, gpu_ids=None, debug=True, port="21012")
@@ -646,9 +823,9 @@ def check_run_py(cfg, root, split, ckpts, state, gan_bpm, work):
         n_test = c["debug"]["debug_split"]          # the test phase's debug cut (it has no val set)
         check(f"test: Out_ maps for {n_test} slices (debug_split), all from the held-out fold",
               len(tested) == n_test and set(tested) <= set(json.loads(split.read_text())["val_case_ids"]), str(tested))
-        check("test: ./ddim_test.txt records resume_state", str(ck / "1") in (work / "run/ddim_test.txt").read_text())
+        check("test: ./ddim_test.txt records resume_state", str(ck / "1") in (run_dir / "ddim_test.txt").read_text())
         # What Palette.load_networks does in the test phase: strict=False over a fresh Network.
-        net = define_network(Log(), {"phase": "test"}, network_opt(c, gan_bpm, ckpts["good"]))
+        net = define_network(Log(), {"phase": "test"}, network_opt(c, gan_bpm, ckpt))
         missing, unexpected = net.load_state_dict(saved, strict=False)
         schedule = {"gammas", "sqrt_recip_gammas", "sqrt_recipm1_gammas", "posterior_log_variance_clipped",
                     "posterior_mean_coef1", "posterior_mean_coef2"}
@@ -671,7 +848,7 @@ def main():
     if str(args.gan_bpm) not in sys.path:
         sys.path.append(str(args.gan_bpm))      # appended, as MCTPDataset_mask does
 
-    cfg = load_config()
+    cfg, cfg_rcbf = load_config(CONFIG), load_config(CONFIG_RCBF)
     tmp = None
     if args.keep is None:
         tmp = tempfile.TemporaryDirectory()
@@ -689,13 +866,17 @@ def main():
     ckpts, state = make_checkpoints(work / "ckpts", args.gan_bpm, root)
 
     parts = check_dataset(root, split, args.gan_bpm, work)
+    parts_rcbf = check_dataset_rcbf(root, split, args.gan_bpm, parts)
     check_val_hook(root, split, args.gan_bpm, parts)
     check_stage(root, split, args.gan_bpm, work)
     check_predictor(ckpts, state, args.gan_bpm, cfg)
     check_network(parts, ckpts, args.gan_bpm, cfg)
+    check_holes(parts_rcbf, ckpts, args.gan_bpm, cfg_rcbf)
     check_mirror(parts, ckpts, args.gan_bpm, cfg)
     check_config(cfg)
-    check_run_py(cfg, root, split, ckpts, state, args.gan_bpm, work)
+    check_config(cfg_rcbf, CONFIG_RCBF, tmax_cfg=cfg)
+    check_run_py(cfg, root, split, ckpts["good"], state, args.gan_bpm, work)
+    check_run_py(cfg_rcbf, root, split, ckpts["rcbf_good"], state, args.gan_bpm, work, full=False)
 
     n_fail = RESULTS.count(False)
     print(f"\n{len(RESULTS) - n_fail}/{len(RESULTS)} checks passed")

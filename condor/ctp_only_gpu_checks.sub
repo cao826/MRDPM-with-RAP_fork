@@ -2,12 +2,14 @@
 # control over the 793 held-out slices, and one forward of the Network at 512. A few minutes.
 # The CPU half is a plain `docker run` on the box (no Condor).
 #
-#   cd condor && mkdir -p log && condor_submit ctp_only_gpu_checks.sub
+#   cd condor && mkdir -p log && condor_submit ctp_only_gpu_checks.sub                          # tmax
+#   cd condor && mkdir -p log && condor_submit ctp_only_gpu_checks.sub -append 'target = rcbf'
 #   cat log/ctp_only_gpu_checks.<cluster>.0.out      # paste this back
 universe                = docker
 docker_image            = registry.cvib.ucla.edu/colivares:mrdpm-env-v1
 
 executable              = ctp_only_gpu_checks.sh
+environment             = "MRDPM_TARGET=$(target:tmax)"
 should_transfer_files   = YES
 when_to_transfer_output = ON_EXIT
 

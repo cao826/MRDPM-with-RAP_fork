@@ -5,6 +5,9 @@ Two parts, run separately, both from the MRDPM repo root in the job image:
     python scripts/ctp_only_box_checks.py --part cpu --out /radraid2/colivares/mrdpm_ctp_only/box_checks
     python scripts/ctp_only_box_checks.py --part gpu --out ...    # condor/ctp_only_gpu_checks.sub
 
+The config is Tmax's unless `--config` names another (rCBF: config/ctp_only_f13_rcbf_fold0.json,
+ctp_only_plan.md §18).
+
 Both parts start with 1: the real checkpoint loads into the predictor, with the sha256 the plan
 recorded (§13), and was trained on this data root.
 
@@ -35,7 +38,9 @@ from torch.utils.data import DataLoader
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))       # MRDPM's `models` and `data` must win over gan_bpm's
 CONFIG = REPO / "config/ctp_only_f13_tmax_fold0.json"
-PLAN_SHA256 = "2428e88482ce0994229a086ac4bb4a56b7b37ada5494156ae3e2ea0eba3a4731"
+# Each config's fold-0 generator, as the plan recorded it (§13 step 0 for Tmax, §18 for rCBF).
+PLAN_SHA256 = {"ctp_only_f13_tmax_fold0": "2428e88482ce0994229a086ac4bb4a56b7b37ada5494156ae3e2ea0eba3a4731",
+               "ctp_only_f13_rcbf_fold0": "bb180198b014a459f21353ac72f2bc741af7ab8fbf329aaef6bb882486505c41"}
 
 RESULTS = []
 
@@ -195,9 +200,11 @@ def gpu_part(args, cfg, ds_args, P, ckpt, summary):
                 print(f"     {done}/{len(test)} slices, {done / (time.time() - t0):.2f} slices/s", flush=True)
     stored = ckpt.get("metrics", {}).get("val_L_pix_brain", ckpt.get("select_value"))
     got = 2 * err / sup             # [0, 1] units -> gan_bpm's [-1, 1] units
+    health = cfg["model"]["which_model"]["args"]["health_log"]
+    physical = got * health["label_scale"] / 2      # [-1, 1] spans the label's range: 12 s, or rCBF 2
     check("pooled L1 over loss_mask = the checkpoint's val_L_pix_brain", abs(got - stored) < 1e-4 * stored,
-          f"{got:.6f} vs {stored:.6f}, {got * 6:.3f} s")
-    summary["predictor_alone"] = {"val_L_pix_brain": got, "stored": stored, "seconds": got * 6}
+          f"{got:.6f} vs {stored:.6f}, {physical:.3f} {health['unit']}")
+    summary["predictor_alone"] = {"val_L_pix_brain": got, "stored": stored, "physical": physical, "unit": health["unit"]}
     P.cpu()
 
     print("\n3. Network from the real config, at 512")
@@ -261,7 +268,7 @@ def main():
     prov = P.provenance
     print(f"     {prov}")
     check("loads into the predictor (config guards, strict weights)", True)
-    check("sha256 is the one recorded in the plan", prov["sha256"] == PLAN_SHA256, prov["sha256"][:16])
+    check("sha256 is the one recorded in the plan", prov["sha256"] == PLAN_SHA256.get(cfg["name"]), prov["sha256"][:16])
     check("it was trained on this data root", Path(str(prov["data_root"])) == Path(ds_args["train"]["mctp_root"]),
           str(prov["data_root"]))
     ckpt = torch.load(ip["checkpoint"], map_location="cpu", weights_only=False)

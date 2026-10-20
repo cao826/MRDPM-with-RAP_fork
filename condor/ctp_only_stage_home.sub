@@ -1,18 +1,22 @@
-# One-time: copy what every fold's training and test jobs read from /radraid2 to the H100 box's
-# own disk, /home/colivares/mrdpm_ctp_only/stage (ctp_only_decisions.md #17). Run it once, and
-# again only if the data on /radraid2 change; a rerun copies only what is missing. No GPU.
+# One-time, per target: copy what every fold's training and test jobs read from /radraid2 to the
+# H100 box's own disk, /home/colivares/mrdpm_ctp_only/stage (ctp_only_decisions.md #17). Run it
+# once per target, and again only if the data on /radraid2 change; a rerun copies only what is
+# missing. No GPU.
 #
-#   cd condor && mkdir -p log && condor_submit ctp_only_stage_home.sub
+#   cd condor && mkdir -p log && condor_submit ctp_only_stage_home.sub                         # tmax
+#   cd condor && mkdir -p log && condor_submit ctp_only_stage_home.sub -append 'target = rcbf'
 #   cat log/ctp_only_stage_home.<cluster>.0.out      # paste this back
 #
-# What it copies (about 17 GB): the Tmax index, the mask cache, and the input and Tmax-label files
-# of all 443 cases (scripts/ctp_only_stage_data.py --side all); gan_bpm's code; split.json and
-# checkpoints/best.pt of gan_bpm's 5 folds. It ends by writing STAGED_OK, which the training job
-# requires.
+# What it copies (about 17 GB per target): the target's index, the mask cache, and the input and
+# label files of all 443 cases (scripts/ctp_only_stage_data.py --side all); split.json and
+# checkpoints/best.pt of gan_bpm's 5 folds for that target; for tmax only, gan_bpm's code. It
+# ends by writing STAGED_OK (tmax) or STAGED_OK_rcbf, which the training job requires. rcbf needs
+# tmax staged first and leaves Tmax's files alone, so it can run beside Tmax training jobs.
 universe                = docker
 docker_image            = registry.cvib.ucla.edu/colivares:mrdpm-env-v1
 
 executable              = ctp_only_stage_home.sh
+environment             = "MRDPM_TARGET=$(target:tmax)"
 transfer_input_files    = ../scripts/ctp_only_stage_data.py
 should_transfer_files   = YES
 when_to_transfer_output = ON_EXIT

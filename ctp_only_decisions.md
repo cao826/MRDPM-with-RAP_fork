@@ -198,6 +198,54 @@ The reasoning, measurements and code details live in `ctp_only_plan.md` (the § 
     Carlos confirmed that jobs may use it.
 - **Status:** decided (Carlos). Plan §13 step 4.
 
+### 18. 2026-10-20 · rCBF: the Tmax recipe, with gan_bpm's rCBF generators
+
+- **Decision:** a second model, f13's 3 CTP phases → rCBF. The initial predictor of fold k is
+  `gan_bpm_rcbf_f13uclav2_adv0_k5/fold_k/checkpoints/best.pt` (λ_adv = 0), with that fold's
+  `split.json`. Everything else is the Tmax recipe (#3–#17): `gt = clip(rCBF, 0, 2)/2`, the same
+  input path, masks, splits, batch, schedule, monitor and checkpointing.
+  `config/ctp_only_f13_rcbf_fold0.json` differs from Tmax's only in the label's keys, which
+  `scripts/ctp_only_checks.py` enforces.
+- **Verified on the box (2026-10-20):** all 5 rCBF fold generators are linear, 3-phase,
+  λ_adv = 0, on the v2 root; every fold's `split.json` equals the Tmax run's; the `/radraid2`
+  stage holds all of rCBF's files, on the same slices and with the same inputs as Tmax's.
+- **Why:** reuse a predictor already trained on this data and these folds, as #1 did for Tmax.
+  With the same folds, the two targets' scores are on the same patients.
+- **Caveats:** as #2, gan_bpm chose each `best.pt` on the held-out fold. About 12 % of UCLA's
+  positive rCBF voxels are above 2 and clip, for both models (gan_bpm's ceiling).
+- **Code:** `models/gan_bpm_predictor.py` (`target`), the config.
+- **Status:** decided (Carlos asked for rCBF, 2026-10-20); the recipe being Tmax's is adopted.
+  Plan §18.
+
+### 19. 2026-10-20 · rCBF trains with a zero residual at no-data voxels (`zero_hole_residual`)
+
+- **Decision:** in training, the residual is `(y_0 − y_initial) × loss_mask`, not `× mask`, so
+  the U-Net's noisy input at a no-data voxel is noise alone. On for rCBF; Tmax's config doesn't
+  set it, so the Tmax runs continue unchanged.
+- **Why:** a hole's label clips to 0. For rCBF that's dead tissue, so the residual there is about
+  −0.5 wherever the tissue is normal: a fake core in the U-Net's input on about 10 % of every
+  UCLA brain, which the convolutions spread to voxels the loss counts. Sampling never shows the
+  model such input. For Tmax, 0 s is normal tissue and the residual at a hole is small.
+- **Alternatives:** (a) leave it, as Tmax does; (b) also switch it on for Tmax, which would make
+  the Tmax folds already trained differ from the later ones.
+- **Code:** `models/network.py` (`zero_hole_residual`), the rCBF config.
+- **Status:** proposed by Claude, built and on in the rCBF config; Carlos to confirm before the
+  rCBF runs start. Plan §18.
+
+### 20. 2026-10-20 · rCBF runs beside Tmax on the H100 box
+
+- **Decision:** the Condor jobs take a `target` macro, passed as `MRDPM_TARGET` (default tmax,
+  arguments unchanged). rCBF is staged into the same `/home` root, with its own generators
+  (`gan_run_rcbf/`) and marker (`STAGED_OK_rcbf`), reusing Tmax's copy of gan_bpm's code and
+  the mask cache without touching them. `condor/ctp_only_rcbf_folds.dag` runs folds 0–4, one at
+  a time.
+- **Why:** the Tmax folds' DAG is running, and its later nodes read the checkout as it is when
+  they start: a new positional argument, or a staging job that replaced gan_bpm's code or Tmax's
+  generators, could break them. One at a time keeps the account at 2 of its 3 GPUs.
+- **Alternatives:** 2 folds at a time (about 2.5 days instead of 4), if nothing else of Carlos's
+  holds a GPU.
+- **Status:** adopted. Plan §18.
+
 ---
 
 ## Open
@@ -209,4 +257,6 @@ The current setting is in brackets.
   orientation look on training cases [not done].
 - **gan_bpm's `best.pt` was chosen on the held-out fold** (plan §17) [proposal: disclose].
 - **EMA at test** [the code validates and tests with `netG`, not the EMA copy].
-- **After Tmax:** rCBF. An optional ablation: BRAN from scratch on 3 channels.
+- **rCBF's hole residual** (#19) [on for rCBF, off for Tmax; Carlos to confirm].
+- **The evaluation plan** covers rCBF too (#15): rCBF < 0.3 Dice and volume beside the MAE.
+- **An optional ablation:** BRAN from scratch on 3 channels.

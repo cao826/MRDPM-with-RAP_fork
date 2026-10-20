@@ -3,11 +3,14 @@
 #   MODE   debug: run.py -d (1 epoch on 4 slices, a monitor pass on 2). full: the whole recipe.
 #   JOBID  Condor's cluster.process: names this job's run folder on /home.
 #   RESUME a checkpoint prefix on /radraid2 (.../checkpoint/<epoch>) to continue from.
+# and MRDPM_TARGET in the environment (the .sub's `target`): tmax, the default, or rcbf. It picks
+# the config (config/ctp_only_f13_<target>_fold0.json) and the staged generators. A job submitted
+# without it is a Tmax job, as before.
 #
 # The data, gan_bpm's code and the fold's generator are already on the H100 box's own disk,
-# /home/colivares/mrdpm_ctp_only/stage (condor/ctp_only_stage_home.sub; ctp_only_decisions.md
-# #17). The job reads them there and writes its run folder there too. Every 10 minutes, and at
-# the end, it moves finished checkpoints and copies everything else to
+# /home/colivares/mrdpm_ctp_only/stage (condor/ctp_only_stage_home.sub, once per target;
+# ctp_only_decisions.md #17). The job reads them there and writes its run folder there too.
+# Every 10 minutes, and at the end, it moves finished checkpoints and copies everything else to
 # /radraid2/colivares/mrdpm_ctp_only/runs/<experiment>/, the only place 14958 can see.
 set -u
 
@@ -22,6 +25,7 @@ FOLD="${1:-0}"
 MODE="${2:-debug}"
 JOBID="${3:-job$$}"
 RESUME="${4:-}"
+TARGET="${MRDPM_TARGET:-tmax}"
 H=/home/colivares/mrdpm_ctp_only
 STAGE="$H/stage"
 EXP_BASE="$H/experiments/$JOBID"
@@ -36,8 +40,14 @@ case "$MODE" in
     full) DEBUG= ;;
     *) fail "mode must be debug or full, not '$MODE'" ;;
 esac
+# Each target's generators and done-marker, as condor/ctp_only_stage_home.sh writes them.
+case "$TARGET" in
+    tmax) GAN_RUN="$STAGE/gan_run"; STAGED="$STAGE/STAGED_OK" ;;
+    rcbf) GAN_RUN="$STAGE/gan_run_rcbf"; STAGED="$STAGE/STAGED_OK_rcbf" ;;
+    *) fail "target must be tmax or rcbf, not '$TARGET'" ;;
+esac
 
-say "host: $(hostname)   date: $(date -Is)   fold $FOLD   mode $MODE   job $JOBID   resume ${RESUME:-<none>}"
+say "host: $(hostname)   date: $(date -Is)   target $TARGET   fold $FOLD   mode $MODE   job $JOBID   resume ${RESUME:-<none>}"
 nvidia-smi -L || echo "(nvidia-smi -L failed)"
 # run.py sets CUDA_VISIBLE_DEVICES to the config's gpu_ids ("0"), which is only this job's GPU
 # when the container sees exactly one.
@@ -45,9 +55,9 @@ n_gpus=$(env -u CUDA_VISIBLE_DEVICES python -c "import torch; print(torch.cuda.d
 [ "$n_gpus" = 1 ] || fail "the container sees $n_gpus GPUs; run.py would take GPU 0, which may not be this job's"
 [ -d "$CODE" ] || fail "no checkout at $CODE (transfer_input_files)"
 say "MRDPM code: $(git -C "$CODE" rev-parse --short HEAD 2>/dev/null || echo '<git unavailable>')"
-[ -f "$STAGE/STAGED_OK" ] || fail "no $STAGE/STAGED_OK: run condor/ctp_only_stage_home.sub first"
-say "stage: $(cat "$STAGE/STAGED_OK")"
-[ -f "$STAGE/gan_run/fold_$FOLD/checkpoints/best.pt" ] || fail "fold $FOLD isn't staged"
+[ -f "$STAGED" ] || fail "no $STAGED: run condor/ctp_only_stage_home.sub (target $TARGET) first"
+say "stage: $(cat "$STAGED")"
+[ -f "$GAN_RUN/fold_$FOLD/checkpoints/best.pt" ] || fail "fold $FOLD of $TARGET isn't staged"
 df -h /home | tail -1
 mkdir -p "$EXP_BASE" || fail "cannot create $EXP_BASE"
 
@@ -62,16 +72,16 @@ fi
 
 echo "==================================================================="
 echo "1. the job's config"
-python - "$CODE/config/ctp_only_f13_tmax_fold0.json" "$W/job_config.json" "$STAGE" "$EXP_BASE" "$FOLD" "$RESUME_LOCAL" <<'PYEOF' || fail "writing the job config"
+python - "$CODE/config/ctp_only_f13_${TARGET}_fold0.json" "$W/job_config.json" "$STAGE" "$EXP_BASE" "$FOLD" "$RESUME_LOCAL" "$TARGET" "$GAN_RUN" <<'PYEOF' || fail "writing the job config"
 import json, sys
-src, dst, stage, base, fold, resume = sys.argv[1:]
+src, dst, stage, base, fold, resume, target, gan_run = sys.argv[1:]
 cfg = json.loads("".join(line.split("//")[0] + "\n" for line in open(src)))    # as core/praser.py reads it
-data, gan, run = f"{stage}/mctp_dataset_f13_isles24_ucla_v2", f"{stage}/gan_bpm", f"{stage}/gan_run/fold_{fold}"
+data, gan, run = f"{stage}/mctp_dataset_f13_isles24_ucla_v2", f"{stage}/gan_bpm", f"{gan_run}/fold_{fold}"
 for phase, key in (("train", "which_dataset"), ("train", "which_val_dataset"), ("test", "which_dataset")):
     cfg["datasets"][phase][key]["args"].update(mctp_root=data, gan_bpm_root=gan, split_json=f"{run}/split.json")
 cfg["model"]["which_networks"][0]["args"]["initial_predictor"].update(
     gan_bpm_root=gan, checkpoint=f"{run}/checkpoints/best.pt", expect_fold=int(fold))
-cfg["name"] = f"ctp_only_f13_tmax_fold{fold}"
+cfg["name"] = f"ctp_only_f13_{target}_fold{fold}"
 cfg["path"].update(base_dir=base, resume_state=resume or None)
 json.dump(cfg, open(dst, "w"), indent=1)
 print(f"name {cfg['name']}, base_dir {base}, resume_state {cfg['path']['resume_state']}")

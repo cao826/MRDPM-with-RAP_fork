@@ -4,7 +4,9 @@
 are decided, and the build passes every check, synthetic and on the real data (§12). The
 orientation is right (§6), but the scans aren't aligned, so the asymmetry flip is off (§6). Step 3,
 the GPU smoke run, passed (§13, §14). Step 4, fold 0 on the H100 box, is built
-(`condor/ctp_only_train_h100.sub`, with the health log of §16): a debug submission first.** Decisions, dated, are listed
+(`condor/ctp_only_train_h100.sub`, with the health log of §16): a debug submission first.
+2026-10-20: the rCBF model is built (§18): the same recipe, gan_bpm's rCBF generators; its box
+checks, staging and debug run come next.** Decisions, dated, are listed
 in `ctp_only_decisions.md`. Branch `ctp-only`. This doc collects what
 was read and decided in conversation so far. Items marked **(verified)** were checked against
 code or data; items marked **(proposal)** wait for Carlos's agreement.
@@ -444,6 +446,9 @@ intermediate tensors. A check enforces that `y` is bitwise equal to `Generator.f
 | `models/health.py` | new: the training-health log (§16) | n/a, used only with `health_log` |
 | `models/model.py`, again | `health_log` hooks in `train_step` / `val_step`; a resumed run continues the LR schedule (§16) | unchanged, except that a resumed run's LR is now right |
 | `models/network.py`, again | the `loss_mask` branch keeps its two terms in `self.loss_terms` | unchanged |
+| `models/gan_bpm_predictor.py`, again | `target` (and `tmax_ceiling`) pick what the checkpoint guard expects (§18) | Tmax at 12 s, as before |
+| `models/network.py`, again | `zero_hole_residual`: the training residual × `loss_mask`, not `mask` (§18) | unchanged |
+| `config/ctp_only_f13_rcbf_fold0.json` | new: Tmax's config with only the label's keys changed (§18) | n/a |
 
 **Untouched:** the diffusion maths, the training loop, EMA, checkpointing and `run.py`.
 
@@ -782,7 +787,7 @@ a perfectly round head).
     reflection across each case's estimated midline (a per-sample `grid_sample`). One model
     edit; gan_bpm's input and the scoring space are unchanged.
   - (b) and (c) both need a midline estimate per case.
-- **After Tmax:** rCBF (same mapping, §5). A BRAN baseline from scratch on 3 channels
+- **After Tmax:** rCBF, built 2026-10-20 (§18). A BRAN baseline from scratch on 3 channels
   (`Encoderv1x(in_channels=3)`) is an optional ablation.
 
 ---
@@ -836,3 +841,95 @@ epoch 1 (`lr_epoch` in `train.csv`).
 - **The rule from here:** freeze the evaluation (metrics, one number per patient, the paired
   comparison) before any held-out fold is scored; change nothing because of test results.
 
+## 18. rCBF (built 2026-10-20)
+
+**What it is (decisions #18).** The Tmax model and recipe (§11, decisions #11–#12), with gan_bpm's
+rCBF λ_adv = 0 fold generators, `gan_bpm_rcbf_f13uclav2_adv0_k5/fold_k/checkpoints/best.pt`, as
+the initial predictor. `config/ctp_only_f13_rcbf_fold0.json` is Tmax's config with only the
+label's keys changed: `label_type`, the gan_bpm run's split and checkpoint, the predictor's
+`target`, the health log's scale (2) and unit (`rCBF`), and `zero_hole_residual` (below).
+`scripts/ctp_only_checks.py` refuses any other difference between the two.
+
+**Value range (verified, as §5 planned).** `gt = clip(rCBF, 0, 2)/2 × envelope`, so 1.0 is rCBF 2
+and normal tissue (rCBF 1) is 0.5. gan_bpm's label is `y = clip(rCBF, 0, 2) − 1`, so `(y + 1)/2`
+is this exactly. The condition, the envelope and `support` (the −0.5 rule) are Tmax's.
+
+**Box probe (verified 2026-10-20, a paste on 14958, read-only):**
+
+- The rCBF run has `config.json`, `cv_summary.json` and five `best.pt`. Every one's config:
+  target rcbf, linear, 3 phases, λ_adv 0 (`gan_mode` reads lsgan, the inert default), seed 42,
+  the v2 root, split `splits/f13_isles24_ucla_k5.json`. The stored ceiling is 40: rCBF runs
+  pass 40, which gan_bpm never reads for rCBF.
+
+  | fold | epoch | val_L_pix_brain | sha256 |
+  |---|---|---|---|
+  | 0 | 7 | 0.22237 | `bb180198b014a459f21353ac72f2bc741af7ab8fbf329aaef6bb882486505c41` |
+  | 1 | 16 | 0.21101 | `f6182b9cdb263768e4162404c330ed07e2a14e673b85f5bfdbdf23d926a739a4` |
+  | 2 | 7 | 0.22345 | `121e15b11bd8bdd771ed6caac90970ffa685bc6f9053e6b80484462365a9fbdb` |
+  | 3 | 9 | 0.21223 | `74ae51f48b5cfcf2de36628a17ff1d2b1b0f19b9253081780ef84b6804a3e5fd` |
+  | 4 | 13 | 0.21348 | `40f5c12294550a91501242ee4a43978285062a39786123328ebc3a68149edecb` |
+
+  `val_L_pix_brain` is in gan_bpm's [−1, 1] units, which for rCBF are rCBF units (its range is
+  2). The box checks' gpu control must reproduce fold 0's 0.22237.
+- Each fold's `split.json` equals the Tmax run's, list for list: fold k of both models trains
+  and tests on the same patients.
+- The `/radraid2` stage has `rcbf_index.parquet` and every rCBF file of the 443 cases: 3,924
+  slices, the same (case, slice) set as Tmax's, 7,848 files, 16.5 GB, none missing. The inputs
+  are byte-identical to Tmax's (40 of 40 sampled).
+- Labels, 20 sampled slices per group: every UCLA slice has the −1 fill (v2), maximum 2.75 (the
+  top of RAPID's colour bar × 2.75). ISLES'24 has nothing below −0.5, maximum 63.6.
+- **The ceiling clips.** Of the positive voxels (whole slice, not only the envelope), 11.7 %
+  (UCLA) and 4.0 % (ISLES'24) are above 2. gan_bpm clips them the same way, so the comparison is
+  unaffected, but both models see hyperaemia flattened to 2. The metrics that matter here
+  (rCBF < 0.3) sit at the other end.
+
+**The predictor guard** (`models/gan_bpm_predictor.py:expected_config`). It takes `target`
+from the config. For rCBF it checks the target, linear labels, the phases and the fold, but not
+the ceiling: gan_bpm's `label_bounds` ignores it for rCBF. A Tmax config still refuses an rCBF
+checkpoint, and an rCBF config a Tmax one.
+
+**No-data holes in the residual (`zero_hole_residual`, decisions #19).** `forward` builds the
+residual as `(y_0 − y_initial) × mask`. At a hole the label is clipped to 0, so the residual
+there is −y_initial. The loss ignores it, but it enters the U-Net's noisy input, and the U-Net's
+convolutions carry it to neighbouring voxels that the loss does count (§7.2's second caveat).
+
+- **Tmax:** 0 s is normal tissue, where the predictor outputs about 0, so a hole's residual is
+  small.
+- **rCBF:** 0 is dead tissue, and in normal tissue the predictor outputs about 0.5. Every hole
+  becomes a residual near −0.5, a fake core in the input, on about 10 % of every UCLA brain, at
+  the low end that the rCBF < 0.3 metrics score. Sampling never shows the model such input.
+- `zero_hole_residual: true` multiplies the residual by `loss_mask` instead: at a hole, the
+  noisy input is the noise alone, `sqrt(1 − γ)·ε`. It is training only. Sampling never reads
+  `loss_mask`, so nothing at test time comes from the label.
+- On in the rCBF config. The Tmax config doesn't set it, so the Tmax runs keep training as they
+  started; the two models differ in this one switch.
+- Checked (synthetic): with it on, gt in the holes changes neither the U-Net's input nor the
+  loss, with the real U-Net; with it off (negative control), it changes both. The input where
+  the label is valid is the same either way.
+
+**Running it on the H100 box.**
+
+- The Condor jobs take a `target` macro (default `tmax`) and pass it as `MRDPM_TARGET`:
+  `ctp_only_train_h100.sub`, `ctp_only_stage_home.sub`, `ctp_only_gpu_checks.sub`. Their
+  arguments are unchanged, so a Tmax node of `ctp_only_folds_1_4.dag` that starts after a
+  `git pull` runs as before.
+- **Staging rCBF** goes into the same root on `/home` (its index and its own copies of the
+  inputs and labels, about 17 GB), with the generators in `gan_run_rcbf/` and the marker
+  `STAGED_OK_rcbf`. It needs Tmax's stage first: it reuses that copy of gan_bpm's code and the
+  mask cache, which is keyed by input content. It changes nothing of Tmax's, so it can run while
+  Tmax trains. (Rerunning the Tmax staging still replaces gan_bpm's code: never while a job runs.)
+- `condor/ctp_only_rcbf_folds.dag`: folds 0–4, one at a time (`MAXJOBS h100 1`, about 4 days).
+  Beside the Tmax DAG that makes 2 GPUs; 2 here would be the account's cap of 3.
+
+**Order.**
+
+1. `git pull` on 14958, then the synthetic checks (`scripts/ctp_only_checks.py`, CPU docker
+   paste): they now cover both configs, the rCBF data, the guard and the switch. Rerun pending.
+2. Box checks with the rCBF config: `--part cpu` (docker) and `--part gpu` (Condor, `target =
+   rcbf`), into `box_checks/rcbf/`.
+3. Stage rCBF on the H100 box.
+4. An rCBF debug run there, then the DAG.
+
+The rule of decisions #15 holds for rCBF too: write down the evaluation (MAE, rCBF < 0.3 Dice and
+volume, one number per patient, the paired comparison with gan_bpm) before any held-out fold is
+scored.
