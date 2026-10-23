@@ -1,0 +1,33 @@
+# One-time: gan_bpm's 30 fold models (3 recipes x 5 folds x 2 targets) on all 94 ISLES 2018
+# scans, as stage-1 maps, for scoring the fold models (ctp_only_eval_plan.md §6.1). On 14958's
+# GPU: the generator runs at about 60 slices/s, so well under an hour. It reads the ISLES 2018
+# root on 14958's /raid directly, so it needs nothing staged and no MRDPM test.
+#
+#   cd /raid/colivares/github_repos/MRDPM-with-RAP_fork && git pull
+#   cd condor && mkdir -p log && condor_submit ctp_only_isles18_ganbpm_maps.sub
+#   condor_submit ctp_only_isles18_ganbpm_maps.sub -append 'args = --target rcbf'   # one target
+#   tail -f log/ctp_only_isles18_ganbpm_maps.<cluster>.0.out
+#
+# It holds one GPU: count it in the account's 3.
+universe                = docker
+docker_image            = registry.cvib.ucla.edu/colivares:mrdpm-env-v1
+
+executable              = ctp_only_isles18_ganbpm_maps.sh
+arguments               = $(args:)
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT
+
+requirements            = (Machine == "REDLRADADM14958.ad.medctr.ucla.edu")
+
+request_gpus            = 1
+request_cpus            = 4
+request_memory          = 24G
+request_disk            = 1G
+
+output                  = log/ctp_only_isles18_ganbpm_maps.$(cluster).$(process).out
+error                   = log/ctp_only_isles18_ganbpm_maps.$(cluster).$(process).err
+log                     = log/ctp_only_isles18_ganbpm_maps.$(cluster).$(process).log
+stream_output           = True
+stream_error            = True
+
+queue

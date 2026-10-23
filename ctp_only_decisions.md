@@ -306,14 +306,50 @@ The reasoning, measurements and code details live in `ctp_only_plan.md` (the § 
 - **Cost:** about 40 H100-hours of sampling (5 folds × 2 targets × about 4 h).
 - **Status:** decided (Carlos). `ctp_only_eval_plan.md` §6.1.
 
+### 25. 2026-10-23 · How the ISLES 2018 fold-model evaluation is built
+
+Settled before any ISLES 2018 map exists, so no result shaped it (#15).
+
+- **MRDPM's map is clipped to the label range:** `pred_norm = clip(2·Out_ − 1, −1, 1)`, not
+  the plain `2·Out_ − 1` of eval plan §4. A diffusion sample can step past the range the
+  label was clipped to (rCBF below 0 or above 2, Tmax above 12 s). gan_bpm's maps can't
+  (Tanh), and gan_bpm's own predictor contract (`predict_case`) refuses values outside
+  [−1, 1]. Clipping changes no core or lesion region (rCBF < 0.3 and Tmax > 6 s lie inside
+  the range), and it can only bring a value closer to a truth that lives in the range. The
+  manifest counts the clipped voxels per model. *Alternative:* no clipping, which breaks
+  gan_bpm's contract and can only add error.
+- **gan_bpm's fold maps are written to disk, not computed inside the scoring script** (#24
+  said "computes them"): `ctp_only_isles18_maps.py gan-bpm`, through the same `CaseLoader` and
+  `CheckpointPredictor`, in stage 1's map format. Every model, MRDPM's, gan_bpm's folds and
+  the all-data ones, then goes through stage 2's `score_target` and `score_dwi` along one
+  code path. The job first reruns stage 1's all-data λ_adv = 0 `last` through the same
+  loader and writer and must match stage 1's stored maps.
+- **ISLES 2018 uses stage 2's metric set:** levels 1–3 after the hole rule and the DWI Dice,
+  without the full-frame (paper-only) metrics, which stage 2 leaves out because they ignore
+  the hole rule. Eval plan §3 listed them for both evaluations; on ISLES 2018 they're
+  [not built]. The headline doesn't depend on them.
+- **Where each map came from is recorded:** the test job writes `source_run.json` (training
+  folder, epoch, sha256 of the EMA checkpoint); the converter refuses a test whose checkpoint
+  no longer matches.
+- **Checks,** in the scoring script, before any table: stage 2's DWI numbers reproduced
+  (reference 0.238 / 0.255 / 0.163, λ_adv = 0 0.036 / 0.099, WGAN-GP `last` 0.109, ±0.0005);
+  MRDPM's saved label as a map scores MAE 0 and the reference's Dice on every scan, and the
+  same one slice off doesn't; the fold-averaged comparison over one fold equals gan_bpm's
+  `comparison_rows`, and differs from another fold's.
+- **Status:** adopted (Carlos may veto the clipping before the first scoring).
+  `scripts/ctp_only_isles18_{maps,score,dag}.py`, `condor/ctp_only_stage_isles18.sub`,
+  `condor/ctp_only_isles18_ganbpm_maps.sub`.
+
 ---
 
 ## Open
 
 The current setting is in brackets.
 
-- **The evaluation build** (`ctp_only_eval_plan.md` §7): EMA testing, the test job, the map
-  converter, the two scoring scripts, ISLES 2018 on the H100 [not built].
+- **The evaluation build** (`ctp_only_eval_plan.md` §7): EMA testing, the test job, ISLES 2018
+  on the H100, the map converter and the ISLES 2018 fold-model scoring [built, not yet run on
+  the box]; the CV scoring script and the all-data ISLES 2018 comparison [not built].
+- **Full-frame metrics on ISLES 2018** (#25) [not built].
 - **Validity checks on training cases** (plan §17): repeat the masking check and the
   orientation look on training cases [not done].
 - **gan_bpm's `best.pt` was chosen on the held-out fold** (plan §17) [proposal: disclose].

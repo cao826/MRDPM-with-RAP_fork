@@ -108,6 +108,7 @@ gan_bpm's `evaluation/metrics.py`, plus one metric defined on this side (PSNR fu
 - **Seed:** recorded. The maps are saved, so scoring never resamples.
 - **Format:** gan_bpm's stage-1 maps, one per case, so both evaluations read the same files:
   `maps/<case_id>.npz` with `pred_norm` (S, H, W) = 2·`Out_` − 1 over the whole frame,
+  clipped to [−1, 1] (decisions #25),
   `pred_phys` (NaN outside the envelope), `envelope`, `ext_gate`, `slice_idx`, `case_id`,
   `patient_id`, and `manifest.json` written last. Every slice of the index, no QC drop.
 
@@ -136,9 +137,10 @@ Two comparisons on the same 94 scans, both scored by one script.
 - **What:** each of MRDPM's 5 fold models, at epoch 200 with the EMA weights, on all 94 scans,
   against gan_bpm's model of the same fold (λ_adv = 0, its own predictor; LSGAN and WGAN-GP as
   context), each fold's `best.pt`. No leakage: no fold trained on ISLES 2018.
-- **gan_bpm's side:** its stage 1 saved maps for the all-data models only. The scoring script
-  computes the fold models' predictions itself, through gan_bpm's `CaseLoader` and
-  `CheckpointPredictor`, read-only (the generator runs at about 60 slices/s).
+- **gan_bpm's side:** its stage 1 saved maps for the all-data models only. The fold models'
+  predictions are computed here, through gan_bpm's `CaseLoader` and `CheckpointPredictor`,
+  read-only (the generator runs at about 60 slices/s), and saved as stage-1 maps before
+  scoring (decisions #25).
 - **Reported:** every metric per fold, and the mean over the 5 folds with the spread between
   them. The paired difference MRDPM − gan_bpm is taken per patient within each fold, averaged
   over the folds per patient, then bootstrapped over patients. The 5 maps are never averaged
@@ -178,14 +180,20 @@ Each with checks and a negative control (the repo's rule). Nothing in gan_bpm ch
    run folder, which gives the target and fold; `testset` = `cv` or `isles18`; `mode`; `epoch`,
    200). It copies the checkpoint to `/home`, samples there, and copies everything but the
    `Process_` trajectories to `/radraid2/colivares/mrdpm_ctp_only/runs/test_…`.
-3. **`Out_` → stage-1 maps**, a script. It refuses a missing slice; a round trip of `GT_`
-   through the same path must equal the dataset's label.
-4. **The CV scoring script** (§5) and **the ISLES 2018 scoring script** (§6: the fold models,
-   with gan_bpm's fold predictions computed in it, and the all-data models), each with its
-   reproduction check.
-5. **ISLES 2018 on the H100:** the test root staged, and a `split.json` listing its 94 scans
-   as `val_case_ids` (the all-data configs point at
-   `/radraid2/colivares/mrdpm_ctp_only/isles2018/split.json`).
+3. **`Out_` → stage-1 maps: built 2026-10-23,** `scripts/ctp_only_isles18_maps.py mrdpm`
+   (decisions #25: clipped to [−1, 1]). It refuses a missing slice, a `Mask_` that isn't the
+   scan's envelope, a `GT_` that isn't the scan's label (every slice, |Δ| ≤ 1e-5), and a test
+   whose EMA checkpoint isn't the training run's (`source_run.json`, written by the test job).
+   It also writes `GT_` as a map once per target, for the scoring check.
+4. **The CV scoring script** (§5) [not built] and **the ISLES 2018 scoring script** (§6):
+   the fold models **built 2026-10-23**, `scripts/ctp_only_isles18_score.py`, with gan_bpm's
+   fold maps from `ctp_only_isles18_maps.py gan-bpm` (`condor/ctp_only_isles18_ganbpm_maps.sub`,
+   14958) and stage 2's reproduction check first; the all-data comparison (§6.2) not wired yet.
+5. **ISLES 2018 on the H100: built 2026-10-23.** `ctp_only_isles18_maps.py split` writes
+   `/radraid2/colivares/mrdpm_ctp_only/isles2018/split.json` (94 scans as `val_case_ids`);
+   `scripts/ctp_only_stage_data.py` copies the root to the `/radraid2` stage on 14958, and
+   `condor/ctp_only_stage_isles18.sub` to the H100's `/home`. `scripts/ctp_only_isles18_dag.py`
+   writes the DAG of tests, one per trained fold.
 6. **The all-data MRDPM runs: built** (decisions #23).
 
 ## 8. Rules

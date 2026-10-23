@@ -83,6 +83,11 @@ for s in _Network.pth _Network_ema.pth .state; do
     cp "$RUN/checkpoint/$EPOCH$s" "$H/resume/$JOBID/" || fail "copying $EPOCH$s"
 done
 say "checkpoint $EPOCH copied from $RUN"
+# Which training run made these maps: the results folder's name says only target and fold.
+ema_sha=$(sha256sum < "$H/resume/$JOBID/${EPOCH}_Network_ema.pth" | cut -c1-64)
+printf '{"run": "%s", "epoch": %s, "ema_sha256": "%s", "testset": "%s", "mode": "%s", "job": "%s", "host": "%s", "date": "%s", "mrdpm_commit": "%s"}\n' \
+    "$RUN" "$EPOCH" "$ema_sha" "$TESTSET" "$MODE" "$JOBID" "$(hostname)" "$(date -Is)" \
+    "$(git -C "$CODE" rev-parse --short HEAD 2>/dev/null)" > "$W/source_run.json"
 
 echo "==================================================================="
 echo "1. the job's config"
@@ -125,7 +130,7 @@ sync_out() {
     dst="$OUT/$(basename "$exp")"
     mkdir -p "$dst"
     (cd "$exp" && tar --exclude='Process_*' --exclude='./code' -cf - .) | (cd "$dst" && tar -xf -)
-    cp -u "$W/test.out" "$W/job_config.json" "$dst/" 2>/dev/null
+    cp -u "$W/test.out" "$W/job_config.json" "$W/source_run.json" "$dst/" 2>/dev/null
     [ -f "$CODE/ddim_test.txt" ] && cp "$CODE/ddim_test.txt" "$dst/"
     RUN_OUT="$dst"
 }

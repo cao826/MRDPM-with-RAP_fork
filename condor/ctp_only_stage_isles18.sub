@@ -1,0 +1,30 @@
+# One-time: copy ISLES 2018 (94 scans, both labels, its mask cache and split.json) from the
+# /radraid2 stage to the H100 box's own disk, for ctp_only_test_h100.sub's testset = isles18
+# (ctp_only_eval_plan.md §6). A few GB; no GPU. Safe beside running training jobs: it only
+# adds stage/isles2018/ and STAGED_OK_isles18.
+#
+# First, on 14958: the split and the /radraid2 copy (handoff_2026-10-23.md, step 1).
+#
+#   cd condor && mkdir -p log && condor_submit ctp_only_stage_isles18.sub
+#   cat log/ctp_only_stage_isles18.<cluster>.0.out      # paste this back
+universe                = docker
+docker_image            = registry.cvib.ucla.edu/colivares:mrdpm-env-v1
+
+executable              = ctp_only_stage_isles18.sh
+transfer_input_files    = ../scripts/ctp_only_stage_data.py
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT
+
+requirements            = (Machine == "REDLRADADM35838.ad.medctr.ucla.edu")
+
+request_cpus            = 2
+request_memory          = 4G
+request_disk            = 1G
+
+output                  = log/ctp_only_stage_isles18.$(cluster).$(process).out
+error                   = log/ctp_only_stage_isles18.$(cluster).$(process).err
+log                     = log/ctp_only_stage_isles18.$(cluster).$(process).log
+stream_output           = True
+stream_error            = True
+
+queue
