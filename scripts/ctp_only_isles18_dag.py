@@ -92,10 +92,13 @@ def main(argv=None):
         "# A retried node samples from scratch (a test has nothing to resume), into a new folder.",
         "",
     ]
-    for name, run in nodes:
+    # DAGMan doesn't submit ready nodes in file order (the rCBF training DAG ran 0, 4, 1, 3),
+    # so PRIORITY keeps this order: rCBF first, then by fold.
+    for i, (name, run) in enumerate(nodes):
         lines += [f"JOB      {name}  ctp_only_test_h100.sub",
                   f'VARS     {name}  run="{run}" testset="isles18" mode="full" epoch="{args.epoch}"',
                   f"CATEGORY {name}  h100",
+                  f"PRIORITY {name}  {len(nodes) - i}",
                   f"RETRY    {name}  1",
                   ""]
     lines.append(f"MAXJOBS  h100  {args.maxjobs}")
