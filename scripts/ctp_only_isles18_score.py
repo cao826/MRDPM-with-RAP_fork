@@ -96,11 +96,11 @@ def fold_models(H, args, targets):
     return models, missing
 
 
-def folds_used(models, target):
-    """Folds where MRDPM and its own predictor, gan_bpm λ_adv = 0, both have maps (LSGAN
-    and WGAN-GP are context: a fold missing one shows "—" there)."""
+def folds_used(models, target, recipes=("mrdpm",)):
+    """Folds where every recipe in `recipes` has maps. MRDPM's alone: its tables (a missing
+    gan_bpm fold shows "—"). With "adv0", its own predictor: the paired comparisons."""
     have = {(m.recipe, m.snapshot) for m in models if m.target == target}
-    return [k for k in M.FOLDS if all((r, f"fold{k}") in have for r in ("mrdpm", "adv0"))]
+    return [k for k in M.FOLDS if all((r, f"fold{k}") in have for r in recipes)]
 
 
 def by_role(models, recipe, role, target="rcbf"):
@@ -283,9 +283,10 @@ def main(argv=None):
     bad_keys = set(zip(bad["model"], bad["target"]))
     models = [m for m in models if (m.name, m.target) not in bad_keys and m.manifest is not None]
     used = {t: folds_used(models, t) for t in targets}
+    paired = {t: folds_used(models, t, ("mrdpm", "adv0")) for t in targets}
     for t in targets:
-        say(f"{t}: {sum(m.target == t for m in models)} models with maps; folds with MRDPM and "
-            f"gan_bpm λ_adv = 0: {used[t] or 'none'}; maps not written yet: "
+        say(f"{t}: {sum(m.target == t for m in models)} models with maps; MRDPM folds "
+            f"{used[t] or 'none'}, of them with gan_bpm λ_adv = 0's too {paired[t] or 'none'}; maps not written yet: "
             f"{sorted(m.name for m in missing if m.target == t) or 'none'}")
     indexes = {t: H.read_test_index(args.test_root, t) for t in M.TARGETS}
     ids = None if args.case_limit is None else sorted(H.expected_slices(indexes["rcbf"]))[:args.case_limit]
@@ -360,8 +361,8 @@ def main(argv=None):
     for t, s in scores.items():
         df = _scored_frame(s.per_case, s.cases, s.metrics)
         frames[t] = df
-        if used[t]:
-            same, control, k = check_fold_comparisons(df, s.per_case, s.cases, s.metrics, used[t],
+        if paired[t]:
+            same, control, k = check_fold_comparisons(df, s.per_case, s.cases, s.metrics, paired[t],
                                                       subsets, BOOT)
             checks.append({"check": f"{t}: fold-averaged comparison over fold {k} = gan_bpm's comparison_rows",
                            "want": "equal", "got": same, "pass": bool(same)})
@@ -385,8 +386,8 @@ def main(argv=None):
         cohorts[t] = H.cohort_frame(s, subsets)
         cohorts[t].to_csv(out / f"{t}_cohort.csv", index=False)
         rows = []
-        for r in SHOWN[1:]:
-            rows += fold_comparisons(frames[t], s.cases, s.metrics, "mrdpm", r, used[t], subsets, BOOT)
+        for r in SHOWN[1:] if paired[t] else ():
+            rows += fold_comparisons(frames[t], s.cases, s.metrics, "mrdpm", r, paired[t], subsets, BOOT)
         comps[t] = pd.DataFrame(rows)
         comps[t].to_csv(out / f"{t}_fold_comparisons.csv", index=False)
 
@@ -402,15 +403,18 @@ def main(argv=None):
             for v in H.DWI_VARIANTS:
                 say.table(f"DWI Dice, {v}, {unit}", fold_table(c, f"dwi_dice_{v}", PP, used["rcbf"]))
                 say(context_line(c, f"dwi_dice_{v}", PP, context))
+            if not paired["rcbf"]:
+                say("(no fold has gan_bpm's map yet: no paired comparison)")
+                continue
             rows, cases = H._dwi_rows(dwi, per_patient)
             dfd = _scored_frame(rows, cases, H.dwi_metrics())
             named = H.patient_subsets(subsets, dwi) if per_patient else subsets
             comp = []
             for r in SHOWN[1:]:
-                comp += fold_comparisons(dfd, cases, H.dwi_metrics(), "mrdpm", r, used["rcbf"], named, BOOT)
+                comp += fold_comparisons(dfd, cases, H.dwi_metrics(), "mrdpm", r, paired["rcbf"], named, BOOT)
             comp = pd.DataFrame(comp)
             comp.to_csv(out / f"dwi_fold_comparisons_{unit.replace(' ', '_')}.csv", index=False)
-            say.table(f"DWI Dice, MRDPM − gan_bpm, {unit}, averaged over folds {used['rcbf']} "
+            say.table(f"DWI Dice, MRDPM − gan_bpm, {unit}, averaged over folds {paired['rcbf']} "
                       "(positive: MRDPM better)",
                       comparison_table(comp, [(f"dwi_dice_{v}", PP) for v in H.DWI_VARIANTS]))
         vols = H.dwi_volumes(dwi)
@@ -421,7 +425,7 @@ def main(argv=None):
 
     for t, s in scores.items():
         if not used[t]:
-            say(f"\n## {H.TARGET_LABEL[t]}: no fold has both MRDPM's and gan_bpm's maps yet")
+            say(f"\n## {H.TARGET_LABEL[t]}: no MRDPM fold has maps yet")
             continue
         say(f"\n## {H.TARGET_LABEL[t]} ({s.scale.unit}): levels 1-3, folds {used[t]}, mean over patients")
         names = [m.name for m in models if is_all(m) and m.target == t]
@@ -429,7 +433,10 @@ def main(argv=None):
             say.table(f"{metric} ({'pooled' if reduction == PP else 'slice mean'})",
                       fold_table(cohorts[t], metric, reduction, used[t], digits))
             say(context_line(cohorts[t], metric, reduction, names, digits))
-        say.table(f"{H.TARGET_LABEL[t]}: MRDPM − gan_bpm per patient, averaged over folds {used[t]} "
+        if not paired[t]:
+            say("(no fold has gan_bpm's map yet: no paired comparison)")
+            continue
+        say.table(f"{H.TARGET_LABEL[t]}: MRDPM − gan_bpm per patient, averaged over folds {paired[t]} "
                   "(MAE, |bias|, |volume error|: negative = MRDPM better; Dice, SSIM: positive)",
                   comparison_table(comps[t], [(m, r) for m, r, _d in key_metrics(H, t)
                                               if not m.startswith(("vol_true", "vol_pred"))]).T)
