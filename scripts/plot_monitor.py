@@ -1,9 +1,11 @@
 """How MRDPM's monitor maps change over training: value histograms against the label's, the
 distribution's numbers per pass, and a few slices across epochs (ctp_only_plan.md §16).
 
-Reads what every monitor pass saved (every val_epoch = 10 epochs; 16 slices of 3 training
-patients): <run>/results/val/<epoch>/{Out_,GT_,Mask_}<case>_slice<k>.npy. They are training
-patients, so this shows how training goes, not how good the model is. For a resumed run, give
+Reads what every monitor pass saved (every val_epoch = 10 epochs; 16 slices of 3 patients):
+<run>/results/val/<epoch>/{Out_,GT_,Mask_}<case>_slice<k>.npy. The monitor patients come from
+the fold's training split but are left out of training (data/dataset.py, part "train"), so
+they are unseen; three patients are few, though, and they are not the evaluation. The monitor
+samples with netG, not the EMA weights the evaluation uses. For a resumed run, give
 its folders in order (the first run, then each resume): a later folder's pass replaces an
 earlier one at the same epoch.
 
