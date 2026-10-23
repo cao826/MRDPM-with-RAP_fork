@@ -36,12 +36,12 @@ RUN_NAME = re.compile(r"_ctp_only_f13_(tmax|rcbf)_")
 def target_of(runs):
     found = set()
     for r in runs:
-        m = RUN_NAME.search(r.name)
+        m = RUN_NAME.search(r.resolve().name)
         if m:
             found.add(m.group(1))
     if len(found) != 1:
-        sys.exit(f"can't tell the target from the folder names ({[r.name for r in runs]}): "
-                 "expected one of *_ctp_only_f13_rcbf_* or *_ctp_only_f13_tmax_*")
+        sys.exit(f"can't tell the target from the folder names ({[r.resolve().name for r in runs]}): "
+                 "pass --target rcbf or --target tmax")
     return found.pop()
 
 
@@ -99,9 +99,10 @@ def main():
     p.add_argument("--epochs", type=int, nargs="+", help="the epochs to draw (default: 5, first to last)")
     p.add_argument("--slices", type=int, default=4, help="slices in monitor_slices.png")
     p.add_argument("--out", type=Path, help="default: the last run's health/")
+    p.add_argument("--target", choices=sorted(TARGETS), help="default: from the folder names")
     args = p.parse_args()
 
-    target = target_of(args.run)
+    target = args.target or target_of(args.run)
     scale, label, unit, threshold, side = TARGETS[target]
     u = f" ({unit})" if unit else ""
     found = passes(args.run)
