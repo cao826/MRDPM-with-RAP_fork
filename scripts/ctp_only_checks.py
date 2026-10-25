@@ -940,9 +940,10 @@ def check_run_py(cfg, root, split, ckpt, state, gan_bpm, work, full=True):
 
         # test_ema (ctp_only_eval_plan.md §4). With a fixed seed the sampling noise repeats, so the
         # maps differ only through the weights. Each run gets its own name: folders are per second.
-        def test_maps(test_ema, tag):
+        def test_maps(test_ema, tag, seed=7):
+            """{prefix: {slice file name: map}} for Out_, Init_ and Mask_, and the run's logs."""
             t = copy.deepcopy(c)
-            t["seed"] = 7
+            t["seed"] = seed
             t["name"] = f"{c['name']}_{tag}"
             t["model"]["which_model"]["args"]["test_ema"] = test_ema
             path = run_dir / f"test_{tag}.json"
@@ -953,16 +954,31 @@ def check_run_py(cfg, root, split, ckpt, state, gan_bpm, work, full=True):
             run.main_worker(0, 1, o)
             exp_t = Path(o["path"]["experiments_root"])
             logs = "".join(f.read_text() for f in exp_t.glob("*.log"))
-            return {f.name: np.load(f) for f in sorted((exp_t / "results/test/0").glob("Out_*.npy"))}, logs
+            return {pre: {f.name[len(pre):]: np.load(f) for f in sorted((exp_t / "results/test/0").glob(f"{pre}*.npy"))}
+                    for pre in ("Out_", "Init_", "Mask_")}, logs
         raw1, _ = test_maps(False, "raw1")
         raw2, log_raw = test_maps(False, "raw2")
         ema, log_ema = test_maps(True, "ema")
+        other, _ = test_maps(False, "seed8", seed=8)
+        out1, init1, mask1 = raw1["Out_"], raw1["Init_"], raw1["Mask_"]
         check("test_ema off: with a fixed seed, two tests give the same maps (the control)",
-              raw1 and raw1.keys() == raw2.keys() and all(np.array_equal(raw1[k], raw2[k]) for k in raw1)
-              and "sampling with the netG weights" in log_raw, f"{len(raw1)} maps")
+              out1 and out1.keys() == raw2["Out_"].keys()
+              and all(np.array_equal(out1[k], raw2["Out_"][k]) for k in out1)
+              and "sampling with the netG weights" in log_raw, f"{len(out1)} maps")
         check("test_ema on: the same seed gives other maps, from the EMA weights",
-              ema.keys() == raw1.keys() and any(not np.array_equal(ema[k], raw1[k]) for k in ema)
+              ema["Out_"].keys() == out1.keys() and any(not np.array_equal(ema["Out_"][k], out1[k]) for k in out1)
               and "sampling with the EMA weights" in log_ema)
+        # Init_: the initial predictor's map alone, Out_ = Init_ + the sampled residual in the mask.
+        check("test: an Init_ for every Out_, zero outside the envelope (Mask_ is 1 exactly inside it)",
+              init1.keys() == out1.keys() == mask1.keys()
+              and all(np.all(init1[k][mask1[k] != 1] == 0) for k in init1), f"{len(init1)} Init_ maps")
+        check("test: Init_ is not Out_ (the sampled residual is added to it)",
+              all(not np.array_equal(init1[k], out1[k]) for k in init1))
+        check("test: another seed gives other Out_ and the same Init_ (the predictor draws no noise)",
+              other["Out_"].keys() == out1.keys() and any(not np.array_equal(other["Out_"][k], out1[k]) for k in out1)
+              and all(np.array_equal(other["Init_"][k], init1[k]) for k in init1))
+        check("test: the EMA weights give another Init_ (the predictor is averaged too)",
+              any(not np.array_equal(ema["Init_"][k], init1[k]) for k in init1))
     finally:
         os.chdir(cwd)
         network.Network.set_new_noise_schedule = original

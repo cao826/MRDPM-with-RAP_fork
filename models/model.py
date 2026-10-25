@@ -119,6 +119,10 @@ class Palette(BaseModel):
             
             ret_path.append('Out_{}'.format(self.path[idx]))
             ret_result.append(self.output[idx].detach().float().cpu())
+
+            if getattr(self, 'init_output', None) is not None:      # set by test() only
+                ret_path.append('Init_{}'.format(self.path[idx]))
+                ret_result.append(self.init_output[idx].detach().float().cpu())
         if self.task in ['my_mission_mask','my_mission_mask_ddim']:
             ret_path.extend(['Mask_{}'.format(name) for name in self.path])
             ret_result.extend(self.mask_image)
@@ -209,8 +213,13 @@ class Palette(BaseModel):
                             y_0=self.gt_image, mask=self.mask, sample_num=self.sample_num,target=self.gt_image)
                 else:
                     if self.task in ['my_mission_mask']:
-                        self.output, self.visuals = net.restoration(self.cond_image, y_t=self.cond_image, 
+                        self.output, self.visuals = net.restoration(self.cond_image, y_t=self.cond_image,
                             y_0=self.gt_image, mask=self.mask, sample_num=self.sample_num,target=self.gt_image)
+                # The initial predictor's map alone (saved as Init_): Out_ = Init_ + the sampled
+                # residual inside the mask. The predictor has no randomness in eval mode, so this
+                # second pass gives restoration's y_initial and draws no noise.
+                initial_net = net.module.initial_net if self.opt['distributed'] else net.initial_net
+                self.init_output = initial_net(self.cond_image)[0] * self.mask
 
 
                 self.iter += self.batch_size

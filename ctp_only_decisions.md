@@ -411,6 +411,31 @@ Settled before any ISLES 2018 map exists, so no result shaped it (#15).
   tests (`ctp_only_test_h100.sub`, `testset = cv`, about 6 h per fold) make them, and the CV
   evaluation (eval plan §5) needs them anyway.
 
+### 29. 2026-10-25 · The CV folds become the development set; the core check, built
+
+- **Decision (Carlos):** the diagnosis of #27 and #28 uses the CV folds' held-out cases. So
+  the CV is a development set from here on: what it shows may change the model, and its
+  numbers are reported as such. ISLES 2018 stays the one untouched test (#15 still holds for
+  it).
+- **Alternatives:** training cases in-sample (no test set touched, but a new test option and
+  extra sampling), or the monitor patients (only a handful).
+- **Built:**
+  - `scripts/ctp_only_core_check.py` (the check of #28, on 14958 through
+    `condor/ctp_only_core_check.sub`, one GPU for gan_bpm's predictions). Maps: MRDPM's
+    `Out_`, MRDPM's own fine-tuned predictor (`Init_`), gan_bpm λ_adv = 0 `best.pt`. Its
+    controls stop it before any model number: the label as a map scores 1, the label one slice
+    off scores below 0.9 on average, and k random voxels land on the analytic floor. It also
+    refuses a test that holds a training case, a `Mask_` that isn't the envelope and a `GT_`
+    that isn't the label.
+  - **The test phase also saves `Init_`,** the initial predictor's map alone
+    (`Out_ = Init_ +` the sampled residual inside the mask), so the check can tell what the
+    diffusion stage adds from what the predictor's fine-tuning did. It is a second forward
+    pass of the predictor after sampling; the predictor has no randomness in eval mode, so no
+    sample changes. Training and the monitor are untouched.
+    `scripts/ctp_only_checks.py` gained four checks for it.
+  - `scripts/ctp_only_isles18_dag.py --testset cv` writes the DAG of CV tests.
+- **Status:** decided (Carlos); built 2026-10-25, not yet run.
+
 ---
 
 ## Open
@@ -431,11 +456,7 @@ The current setting is in brackets.
 - **Map figures on the CV held-out cases and hard training slices** (#27): raw input, model
   input, generated and true rCBF [bookmarked, not built].
 - **Why the core is missed** (2026-10-25 discussion): the "right place or wrong level" check
-  on the training data (#28) [decided, not built]; gan_bpm's 2g, the same on ISLES 2018
-  against DWI (in gan_bpm's uncommitted working tree) [not run]; Zeng's 10–80 HU window as a
-  reported region; several samples per slice instead of one (would revise #22); Zeng's
-  spatial and temporal smoothing [not started].
-- **Which cases the diagnosis uses** (#27, #28): the CV folds' held-out cases are held out
-  too (#15), so diagnosing on them would make the CV a development set, with ISLES 2018 the
-  only untouched test. The alternatives are the training cases themselves (in-sample) and
-  the monitor patients [to settle].
+  on the CV held-out cases (#28, #29) [built, not run: needs the CV tests]; gan_bpm's 2g, the
+  same on ISLES 2018 against DWI (in gan_bpm's uncommitted working tree) [not run]; Zeng's
+  10–80 HU window as a reported region; several samples per slice instead of one (would
+  revise #22); Zeng's spatial and temporal smoothing [not started].

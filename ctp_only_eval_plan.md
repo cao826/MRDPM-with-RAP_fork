@@ -199,6 +199,9 @@ Each with checks and a negative control (the repo's rule). Nothing in gan_bpm ch
 ## 8. Rules
 
 - Nothing changes because of a held-out or ISLES 2018 result (decisions #15).
+  **Since 2026-10-25 the CV folds are a development set** (decisions #29): the diagnosis of
+  why the core is missed looks at their held-out cases, so their numbers are reported as
+  development numbers. ISLES 2018 stays untouched.
 - No test-time choice is left: the checkpoint, the weights and the sampling are fixed above.
 - Every number comes with its CI. Comparisons are paired per patient.
 - gan_bpm's `best.pt` caveat (§5) and the no-asymmetry-prior deviation (decisions #10) are

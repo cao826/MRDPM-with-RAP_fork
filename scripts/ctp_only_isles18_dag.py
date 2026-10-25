@@ -1,15 +1,18 @@
-"""Write the DAG that samples MRDPM's ISLES 2018 maps (ctp_only_eval_plan.md §6.1): one
-condor/ctp_only_test_h100.sub node per trained fold model, testset = isles18, mode = full.
+"""Write the DAG that samples MRDPM's test maps: one condor/ctp_only_test_h100.sub node per
+trained fold model, mode = full, on ISLES 2018 (--testset isles18, the default;
+ctp_only_eval_plan.md §6.1) or on each fold's own held-out CV cases (--testset cv; §5, and
+the core check of ctp_only_decisions.md #28).
 
 Runs on 14958 with any python3 (standard library only). A (target, fold) is trained when
 exactly one train_ctp_only_f13_<target>_fold<k>_* folder under --runs has
 checkpoint/<epoch>_Network_ema.pth (a killed run and its resume are two folders; only the
-resume reaches 200). It is left out when a complete ISLES 2018 test of that same training
-folder exists (its source_run.json names the folder, and all 502 slices are there). Prints
-every (target, fold) and what it found. rCBF first: its DWI Dice is the headline.
+resume reaches 200). It is left out when a complete test of that same training folder on
+that test set exists (its source_run.json names the folder; complete: all 502 slices for
+ISLES 2018, and for a CV test the ddim_test.txt that run.py writes only after the last slice).
+Prints every (target, fold) and what it found. rCBF first: its core is the headline.
 
-    python3 scripts/ctp_only_isles18_dag.py [--maxjobs 1] [--target rcbf] [--fold 0 --fold 3]
-    cd condor && condor_submit_dag ctp_only_isles18_tests_<date_time>.dag
+    python3 scripts/ctp_only_isles18_dag.py [--testset cv] [--maxjobs 1] [--target rcbf] [--fold 0 --fold 3]
+    cd condor && condor_submit_dag ctp_only_<testset>_tests_<date_time>.dag
 
 The account may hold 3 GPUs at once, and going over gets jobs booted: --maxjobs is how
 many of this DAG's tests run at once, so count what else is running first (condor_q -run).
@@ -37,27 +40,34 @@ def n_slices(test):
     return sum(1 for p in (test / "results" / "test").glob("*/Out_*.npy"))
 
 
-def tests_of(runs, target, fold):
-    """{training folder: [complete ISLES 2018 test folders made from it]}."""
+def complete(test, testset):
+    if testset == "isles18":
+        return n_slices(test) == SLICES
+    return (test / "ddim_test.txt").is_file() and n_slices(test) > 0
+
+
+def tests_of(runs, target, fold, testset):
+    """{training folder: [complete test folders on `testset` made from it]}."""
     out = {}
-    for test in runs.glob(f"test_ctp_only_f13_{target}_fold{fold}_isles18_*"):
+    for test in runs.glob(f"test_ctp_only_f13_{target}_fold{fold}_{testset}_*"):
         src = test / "source_run.json"
         if not src.is_file():
             continue
-        made_from = json.loads(src.read_text()).get("run", "")
-        if n_slices(test) == SLICES:
-            out.setdefault(Path(made_from).name, []).append(test.name)
+        made = json.loads(src.read_text())
+        if made.get("testset") == testset and made.get("mode") == "full" and complete(test, testset):
+            out.setdefault(Path(made.get("run", "")).name, []).append(test.name)
     return out
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("--testset", choices=("isles18", "cv"), default="isles18")
     p.add_argument("--runs", type=Path, default=RUNS)
     p.add_argument("--target", action="append", choices=TARGETS)
     p.add_argument("--fold", action="append", type=int, choices=FOLDS)
     p.add_argument("--epoch", type=int, default=200)
     p.add_argument("--maxjobs", type=int, default=1, help="this DAG's tests at once (default 1)")
-    p.add_argument("--out", type=Path, help="default: condor/ctp_only_isles18_tests_<date_time>.dag")
+    p.add_argument("--out", type=Path, help="default: condor/ctp_only_<testset>_tests_<date_time>.dag")
     p.add_argument("--dry-run", action="store_true", help="print the table, write no DAG")
     args = p.parse_args(argv)
 
@@ -73,22 +83,24 @@ def main(argv=None):
                 last = [f"{r.name} at {latest_checkpoint(r)}" for r in runs]
                 state = "not trained yet" + (f" ({'; '.join(last)})" if last else " (no run folder)")
             else:
-                tested = tests_of(args.runs, target, k).get(done[0].name)
+                tested = tests_of(args.runs, target, k, args.testset).get(done[0].name)
                 if tested:
                     state = f"tested already: {', '.join(sorted(tested))}"
                 else:
-                    state = f"ready to test (no complete ISLES test on /radraid2 yet): {done[0].name}"
+                    state = f"ready to test (no complete {args.testset} test on /radraid2 yet): {done[0].name}"
                     nodes.append((f"{target.upper()}_F{k}", done[0]))
             print(f"{target:<6} {k:<5} {state}")
     if not nodes or args.dry_run:
         print("nothing to test: no DAG written" if not nodes else f"\n{len(nodes)} to test (dry run: no DAG written)")
         return 0
 
-    out = args.out or REPO / "condor" / f"ctp_only_isles18_tests_{datetime.now():%y%m%d_%H%M%S}.dag"
+    out = args.out or REPO / "condor" / f"ctp_only_{args.testset}_tests_{datetime.now():%y%m%d_%H%M%S}.dag"
+    what = {"isles18": "ISLES 2018 maps (ctp_only_eval_plan.md §6.1). About 4 h each",
+            "cv": "maps of each fold's held-out CV cases (§5). About 6 h each"}[args.testset]
     lines = [
-        "# Written by scripts/ctp_only_isles18_dag.py: MRDPM's ISLES 2018 maps, one test per",
-        "# trained fold model (ctp_only_eval_plan.md §6.1). About 4 h each on the H100.",
-        "# Results: /radraid2/colivares/mrdpm_ctp_only/runs/test_ctp_only_f13_<target>_fold<k>_isles18_<time>/",
+        f"# Written by scripts/ctp_only_isles18_dag.py: MRDPM's {what}",
+        "# on the H100, one test per trained fold model.",
+        f"# Results: /radraid2/colivares/mrdpm_ctp_only/runs/test_ctp_only_f13_<target>_fold<k>_{args.testset}_<time>/",
         "# A retried node samples from scratch (a test has nothing to resume), into a new folder.",
         "",
     ]
@@ -96,15 +108,16 @@ def main(argv=None):
     # so PRIORITY keeps this order: rCBF first, then by fold.
     for i, (name, run) in enumerate(nodes):
         lines += [f"JOB      {name}  ctp_only_test_h100.sub",
-                  f'VARS     {name}  run="{run}" testset="isles18" mode="full" epoch="{args.epoch}"',
+                  f'VARS     {name}  run="{run}" testset="{args.testset}" mode="full" epoch="{args.epoch}"',
                   f"CATEGORY {name}  h100",
                   f"PRIORITY {name}  {len(nodes) - i}",
                   f"RETRY    {name}  1",
                   ""]
     lines.append(f"MAXJOBS  h100  {args.maxjobs}")
     out.write_text("\n".join(lines) + "\n")
+    hours = {"isles18": 4, "cv": 6}[args.testset]
     print(f"\nwrote {out}: {len(nodes)} tests, {args.maxjobs} at a time "
-          f"(about {4 * -(-len(nodes) // args.maxjobs)} h)")
+          f"(about {hours * -(-len(nodes) // args.maxjobs)} h)")
     print(f"  cd {out.parent} && condor_submit_dag {out.name}")
     return 0
 
