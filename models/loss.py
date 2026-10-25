@@ -12,6 +12,34 @@ def smooth_l1_loss(output, target):
 def mse_loss(output, target):
     return F.mse_loss(output, target)
 
+
+# bran_ext_plan.md §3: Zeng et al.'s extreme loss (gan_bpm models/losses.py:l_ext) on MRDPM's
+# [0, 1] label. gan_bpm's label is B = 2·gt − 1, so with ext weight w,
+#     L1 + w · mean(W · (pred − gt)²),   W = (2·gt − 1)²,
+# is gan_bpm's 100·L_pix + λ_ext·L_ext divided by 200 when w = λ_ext / 50: Zeng's λ_ext = 50 is w = 1.
+EXT_SIDES = ('both', 'low', 'high')
+
+
+def ext_weight(gt, side='both'):
+    """W = (2·gt − 1)²: 1 at both ends of the label's range, 0 at its middle (rCBF 1, Tmax 6 s).
+
+    side 'low' keeps the lower half only (rCBF's core end), 'high' the upper half (Tmax's lesion
+    end); the two halves add up to 'both'."""
+    b = 2. * gt - 1.
+    if side == 'low':
+        b = b.clamp(max=0.)
+    elif side == 'high':
+        b = b.clamp(min=0.)
+    elif side != 'both':
+        raise ValueError('ext side must be one of {}, not {!r}'.format(EXT_SIDES, side))
+    return b * b
+
+
+def ext_term(output, target, weight, valid):
+    """mean(valid · weight · (output − target)²) over every element, normalized as the L1 and MSE
+    terms beside it in Network.forward are."""
+    return (valid * weight * (output - target) ** 2).mean()
+
     
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2, alpha=None, size_average=True):

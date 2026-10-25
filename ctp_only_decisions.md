@@ -440,6 +440,101 @@ Settled before any ISLES 2018 map exists, so no result shaped it (#15).
     whether MRDPM's starting map knows where the core is.
 - **Status:** decided (Carlos); built 2026-10-25, not yet run.
 
+### 30. 2026-10-25 · The paper's own predictor, BRAN, as an arm (branch `bran-ext`)
+
+- **Decision:** a second kind of initial predictor beside gan_bpm's generator: **BRAN**, the
+  paper's (`models/region_net.py`), at 3 input channels and otherwise as the code builds it (ngf
+  32, region-aware convs, BatchNorm, DropBlock). It is pretrained alone, then trained into MRDPM
+  with today's recipe:
+  - **Pretraining:** L1 over `support` (paper Eq. 1), 50 epochs, Adam, LR linear to 0 (upstream
+    README). **lr 2e-4, betas (0.5, 0.999), N(0, 0.02) init and batch 4 are our choices**: the
+    README and the paper give none of them. The first three are pix2pix's defaults, which BRAN's
+    code comes from; batch 4 is the joint stage's. The model is the last epoch. It trains on the
+    fold's training cases minus the monitor patients, as the MRDPM run does.
+  - **Input:** BRAN reads the condition × envelope (`mask_cond`), the paper's skull-stripped
+    input, as the U-Net already does. This differs from #6, where gan_bpm's generator reads the
+    whole head because that is how it was trained.
+  - **Flip:** still off (#10). The paper's ablation gives the whole asymmetry module 0.002 MAE
+    and BRAN 0.001, against 0.014 for the mask, and reports no core number. Nothing there argues
+    for registering our scans first.
+- **Why:** Carlos asked for the run closest to the paper's setup (`model_improvement_plan.md`
+  item 1). gan_bpm's generator is half BRAN's width, with InstanceNorm and no region-aware convs,
+  and its `best.pt` was chosen on the held-out fold (#2).
+- **Guard:** `Network` refuses a BRAN checkpoint whose `meta` disagrees with the config (target,
+  fold, channels, masked input, loss, recipe), or a debug or unfinished pretraining unless
+  `allow_debug` (only the debug training job sets it).
+- **Code:** `models/bran_predictor.py`, `models/region_net.py` (`cond_channels`),
+  `models/network.py` (`type: "bran"`, `Network.initial`), `scripts/pretrain_bran.py`,
+  `condor/ctp_only_bran_pretrain_h100.{sub,sh}`. Plan: `bran_ext_plan.md` §2.
+- **Status:** proposed by Claude and built 2026-10-25, at Carlos's request; checks not run, nothing
+  trained. Carlos to confirm the recipe choices and the masked input.
+
+### 31. 2026-10-25 · Zeng's extreme loss inside MRDPM: in the predictor, and as a voxel weight on L_diff
+
+- **Decision:** two optional terms, both off unless a config sets them:
+  - `initial_predictor.ext = {weight w, side}`: `w · mean(support · W · (pred − gt)²)` with
+    `W = (2·gt − 1)²` (Zeng's `W_B = B ⊙ B` on MRDPM's [0, 1] label), added to BRAN's pretraining
+    loss and to the joint stage's L_init. **w = λ_ext / 50** is gan_bpm's balance exactly (checked
+    against gan_bpm's `losses.py`), so Zeng's λ_ext = 50 is w = 1, the arms' value.
+  - `diffusion_ext = {weight w, side}`: `w · mean(support · W(gt) · (ε − ε̂)²)` added to L_diff.
+    Since `(ε̂ − ε)² = SNR_t · (x̂₀ − x₀)²`, this is the extreme loss on each step's estimate of
+    the final map. It tilts the samples toward extreme values. w = 1 (each voxel's weight
+    1 + W) has no reference value.
+- **Why:** Carlos asked whether L_ext could stand in for the asymmetry prior, and where it
+  belongs. The predictor term is plug and play. L_diff compares noise, so the term needs the
+  translation above.
+- **Code:** `models/loss.py` (`ext_weight`, `ext_term`), `models/network.py`,
+  `scripts/pretrain_bran.py`; logged as `loss_init_ext` / `loss_diff_ext` in `health/train.csv`.
+  Plan: `bran_ext_plan.md` §3.
+- **Status:** proposed by Claude and built 2026-10-25; not run.
+
+### 32. 2026-10-25 · The EMA copy averages BatchNorm's statistics too
+
+- **Decision:** `EMA.update_model_average` also averages the floating-point buffers that the two
+  models share, the same way it averages parameters, and copies integer ones (BatchNorm's step
+  count).
+- **Why:** the test samples with the EMA copy (#22). BRAN's BatchNorm statistics are buffers, so
+  without this the EMA copy would test 200 epochs of fine-tuned weights under the pretraining's
+  statistics. Upstream tests with netG and never met it. gan_bpm's generator and the U-Net have
+  no such buffers, so today's runs are unchanged.
+- **Alternatives:** test BRAN arms with netG (another rule than #22's); copy, not average, the
+  statistics.
+- **Code:** `models/model.py`. Plan: `bran_ext_plan.md` §2.4.
+- **Status:** adopted (built 2026-10-25).
+
+### 33. 2026-10-25 · One branch, five arms on rCBF fold 0, and how they're judged
+
+- **Decision:** one branch, `bran-ext`. Every extreme-loss arm runs on BRAN, and plain BRAN is
+  their control. The arms (`config/ctp_only_f13_rcbf_<arm>_fold0.json`) are `bran_l1`,
+  `bran_ext`, `bran_ext_diffext` and `bran_l1_diffext` (a 2 × 2 of the extreme loss in the
+  predictor and in L_diff), plus `bran_extlow` as a predictor alone (#34). Each config differs
+  from `ctp_only_f13_rcbf_fold0.json` only in its name, `initial_predictor` and `diffusion_ext`.
+  `condor/ctp_only_bran_ext.dag` pretrains, checks the BRANs alone, trains, CV-tests (today's
+  model too) and scores.
+- **Judged (pre-declared):** on fold 0's held-out cases against the label's rCBF < 0.3 core.
+  `bran_l1` against today's model is reported as paired differences, with no pick. Among the
+  arms, the rule of gan_bpm `ext_gan_plan.md` §1.4 with `bran_l1` as the control: the highest
+  Dice at 0.3 whose paired difference has a 95 % CI above 0, with brain MAE at most 1.15 × the
+  control's. ISLES 2018 is untouched (#15, #29).
+- **Code:** the configs, `condor/ctp_only_bran_ext.dag`, `condor/ctp_only_{train,test}_h100.*`
+  (`variant`), `scripts/ctp_only_core_check.py` (`--variant`, `--bran`). Plan:
+  `bran_ext_plan.md` §4–§5.
+- **Status:** proposed by Claude and built 2026-10-25; Carlos to approve before submitting (about
+  120 GPU-hours).
+
+### 34. 2026-10-25 · A low-tail extreme loss, as a predictor alone first
+
+- **Decision:** `side: "low"` keeps W below the label's middle only (rCBF < 1), and the
+  `bran_extlow` arm pretrains BRAN with it. It is scored alone against `bran_l1` and `bran_ext`
+  before any diffusion run. Every pretraining logs `ext_low_share`, the share of L_ext that comes
+  from the low half.
+- **Why:** Zeng's W is 1 at rCBF 2 as at rCBF 0, and the error is squared. Vessel voxels, with
+  their larger errors, may carry most of L_ext. That would explain why it barely moved gan_bpm's
+  core (`model_improvement_plan.md` item 7). This is a hypothesis; the logged share measures it.
+- **Next, not built:** a soft-Dice term on rCBF < 0.3 (`bran_ext_plan.md` §3.5), if the weights
+  move only the level.
+- **Status:** proposed by Claude and built 2026-10-25; not run.
+
 ---
 
 ## Open
@@ -472,3 +567,7 @@ The current setting is in brackets.
   cos(pix, ext) 0.27 / 0.80 / 0.79 / −0.08 / 0.35 for folds 0–4. The core check on the CV
   held-out cases, gan_bpm only: Dice at 0.3 is 0.42, matched 0.48, floor 0.06, volume 0.59 × the
   label's: mostly a place problem. `/radraid2/colivares/mrdpm_ctp_only/{ext_share,cv_core_check}/`].
+- **The BRAN and extreme-loss arms** (#30–#34, branch `bran-ext`, `bran_ext_plan.md`): the box
+  checks (`scripts/bran_ext_checks.py`, `scripts/ctp_only_checks.py`), a debug pretraining and
+  training of `bran_l1`, then `condor/ctp_only_bran_ext.dag` [built, not run]; the recipe
+  choices of #30 and the masked input [Carlos to confirm]; the soft-Dice term [not built].

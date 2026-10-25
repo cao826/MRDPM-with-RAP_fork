@@ -7,7 +7,9 @@
 #   RESUME a checkpoint prefix on /radraid2 (.../checkpoint/<epoch>) to continue from.
 # and MRDPM_TARGET in the environment (the .sub's `target`): tmax, the default, or rcbf. It picks
 # the config (config/ctp_only_f13_<target>_fold0.json) and the staged generators. A job submitted
-# without it is a Tmax job, as before.
+# without it is a Tmax job, as before. MRDPM_VARIANT (the .sub's `variant`, none by default) picks
+# an arm's config instead, config/ctp_only_f13_<target>_<variant>_fold0.json (bran_ext_plan.md §5);
+# a BRAN arm's predictor is copied from /radraid2/colivares/mrdpm_ctp_only/bran/<name>/fold_<k>/.
 #
 # The data, gan_bpm's code and the fold's generator are already on the H100 box's own disk,
 # /home/colivares/mrdpm_ctp_only/stage (condor/ctp_only_stage_home.sub, once per target;
@@ -33,6 +35,7 @@ MODE="${2:-debug}"
 JOBID="${3:-job$$}"
 RESUME="${4:-}"
 TARGET="${MRDPM_TARGET:-tmax}"
+VARIANT="${MRDPM_VARIANT:-none}"
 H=/home/colivares/mrdpm_ctp_only
 STAGE="$H/stage"
 EXP_BASE="$H/experiments/$JOBID"
@@ -64,8 +67,12 @@ else
     RUN_SUB="fold_$FOLD"
     CONFIG="$CODE/config/ctp_only_f13_${TARGET}_fold0.json"
 fi
+if [ "$VARIANT" != none ]; then
+    [ "$FOLD" != all ] || fail "the arms (variant) are fold models; there is no all-data arm"
+    CONFIG="$CODE/config/ctp_only_f13_${TARGET}_${VARIANT}_fold0.json"
+fi
 
-say "host: $(hostname)   date: $(date -Is)   target $TARGET   fold $FOLD   mode $MODE   job $JOBID   resume ${RESUME:-<none>}"
+say "host: $(hostname)   date: $(date -Is)   target $TARGET   variant $VARIANT   fold $FOLD   mode $MODE   job $JOBID   resume ${RESUME:-<none>}"
 nvidia-smi -L || echo "(nvidia-smi -L failed)"
 # run.py sets CUDA_VISIBLE_DEVICES to the config's gpu_ids ("0"), which is only this job's GPU
 # when the container sees exactly one.
@@ -131,10 +138,12 @@ fi
 
 echo "==================================================================="
 echo "1. the job's config"
-python - "$CONFIG" "$W/job_config.json" "$STAGE" "$EXP_BASE" "$FOLD" "$RESUME_LOCAL" "$TARGET" "$GAN_RUN/$RUN_SUB" <<'PYEOF' || fail "writing the job config"
-import json, sys
+mkdir -p "$H/bran_in/$JOBID" || fail "cannot create $H/bran_in/$JOBID"
+python - "$CONFIG" "$W/job_config.json" "$STAGE" "$EXP_BASE" "$FOLD" "$RESUME_LOCAL" "$TARGET" "$GAN_RUN/$RUN_SUB" \
+    "$VARIANT" "$MODE" "$H/bran_in/$JOBID" <<'PYEOF' || fail "writing the job config"
+import json, shutil, sys
 from pathlib import Path
-src, dst, stage, base, fold, resume, target, run = sys.argv[1:]
+src, dst, stage, base, fold, resume, target, run, variant, mode, bran_in = sys.argv[1:]
 cfg = json.loads("".join(line.split("//")[0] + "\n" for line in open(src)))    # as core/praser.py reads it
 data, gan = f"{stage}/mctp_dataset_f13_isles24_ucla_v2", f"{stage}/gan_bpm"
 # The all-data config has no monitor, and its test set is ISLES 2018, which training never reads.
@@ -143,13 +152,28 @@ blocks = ([("train", "which_dataset")] if fold == "all" else
 for phase, key in blocks:
     cfg["datasets"][phase][key]["args"].update(mctp_root=data, gan_bpm_root=gan, split_json=f"{run}/split.json")
 ip = cfg["model"]["which_networks"][0]["args"]["initial_predictor"]
-checkpoint = f"{run}/checkpoints/{Path(ip['checkpoint']).name}"     # best.pt, or the all-data epoch_<M>.pt
-if not Path(checkpoint).is_file():
-    sys.exit(f"{checkpoint} isn't staged")
-ip.update(gan_bpm_root=gan, checkpoint=checkpoint)
-if fold != "all":
-    ip["expect_fold"] = int(fold)
-cfg["name"] = f"ctp_only_f13_{target}_" + ("all" if fold == "all" else f"fold{fold}")
+if ip.get("type") == "bran":
+    # bran_ext_plan.md §5: the fold's pretrained BRAN on /radraid2 (a debug run takes the debug one
+    # if there is one), copied to /home: jobs don't read /radraid2 while they run
+    ck = Path(ip["checkpoint"])                  # .../bran/<name>/fold_0/bran_G.pth
+    name, root = ck.parent.parent.name, ck.parent.parent.parent
+    tries = ([root / f"debug_{name}"] if mode == "debug" else []) + [root / name]
+    found = [t / f"fold_{fold}" / ck.name for t in tries if (t / f"fold_{fold}" / ck.name).is_file()]
+    if not found:
+        sys.exit(f"no pretrained BRAN at {tries[-1] / f'fold_{fold}' / ck.name}: run "
+                 f"ctp_only_bran_pretrain_h100.sub for it first")
+    shutil.copy(found[0], f"{bran_in}/{ck.name}")
+    print(f"BRAN {found[0]} -> {bran_in}/{ck.name}")
+    ip.update(checkpoint=f"{bran_in}/{ck.name}", expect_fold=int(fold), allow_debug=(mode == "debug"))
+else:
+    checkpoint = f"{run}/checkpoints/{Path(ip['checkpoint']).name}"     # best.pt, or the all-data epoch_<M>.pt
+    if not Path(checkpoint).is_file():
+        sys.exit(f"{checkpoint} isn't staged")
+    ip.update(gan_bpm_root=gan, checkpoint=checkpoint)
+    if fold != "all":
+        ip["expect_fold"] = int(fold)
+cfg["name"] = (f"ctp_only_f13_{target}_" + (f"{variant}_" if variant != "none" else "")
+               + ("all" if fold == "all" else f"fold{fold}"))
 cfg["path"].update(base_dir=base, resume_state=resume or None)
 json.dump(cfg, open(dst, "w"), indent=1)
 print(f"name {cfg['name']}, base_dir {base}, resume_state {cfg['path']['resume_state']}")

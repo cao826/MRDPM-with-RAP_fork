@@ -58,8 +58,10 @@ class HealthLog:
         self.sums["loss"] += value
         terms = getattr(net, "loss_terms", None)
         if terms is not None:
-            self.sums["loss_diff"] += float(terms["loss_diff"])
-            self.sums["loss_init"] += float(terms["loss_init"])
+            # loss_diff and loss_init, plus the extreme-loss terms of a run that has them (their
+            # columns follow; a run has the same terms at every step, so its header stays fixed)
+            for k, v in terms.items():
+                self.sums[k] = self.sums.get(k, 0.0) + float(v)
             self.term_steps += 1
         norms = [p.grad.norm() for p in net.parameters() if p.grad is not None]
         if norms:
@@ -74,6 +76,8 @@ class HealthLog:
             "loss": mean(self.sums["loss"], finite),
             "loss_diff": mean(self.sums["loss_diff"], self.term_steps),
             "loss_init": mean(self.sums["loss_init"], self.term_steps),
+            **{k: mean(v, self.term_steps) for k, v in sorted(self.sums.items())
+               if k not in ("loss", "loss_diff", "loss_init")},
             "grad_norm_mean": float(np.mean(self.grad_norms)) if self.grad_norms else float("nan"),
             "grad_norm_max": float(np.max(self.grad_norms)) if self.grad_norms else float("nan"),
             "steps": self.steps, "nonfinite_steps": self.nonfinite,
@@ -90,7 +94,7 @@ class HealthLog:
     def monitor_batch(self, net, cond, gt, mask, loss_mask, output):
         """After restoration, on the batch it sampled."""
         net = getattr(net, "module", net)
-        y_initial = net.initial_net(cond)[0] * mask
+        y_initial = net.initial(cond, mask)[0]
         valid = mask if loss_mask is None else loss_mask
         self.err_out += float(((output - gt).abs() * valid).sum())
         self.err_init += float(((y_initial - gt).abs() * valid).sum())

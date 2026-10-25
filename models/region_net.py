@@ -147,9 +147,11 @@ class Encoderv1x(nn.Module):
 
 class Unetgenerator_256(nn.Module):
 
-    def __init__(self, in_channels=1, out_channels=1, ngf=8):
+    # `in_channels` multiplies the decoder widths (upstream's name); `cond_channels` is the
+    # condition's channel count, 4 upstream (NCCT + 3 mCTA phases), 3 for CTP phases alone
+    def __init__(self, in_channels=1, out_channels=1, ngf=8, cond_channels=4):
         super(Unetgenerator_256, self).__init__()
-        self.encoder = Encoderv1x(ngf=ngf)
+        self.encoder = Encoderv1x(in_channels=cond_channels, ngf=ngf)
 
         self.up1 = UNetUp(int(ngf * 8 * (in_channels)), int(ngf * 8))
         self.up2 = UNetUp(int(ngf * 8 * (in_channels * 2)), int(ngf * 8), dropout=0.5)

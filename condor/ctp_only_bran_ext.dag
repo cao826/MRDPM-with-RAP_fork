@@ -1,0 +1,107 @@
+# The BRAN and extreme-loss experiment, rCBF fold 0 (bran_ext_plan.md §5): the paper's own
+# predictor in place of gan_bpm's generator, and Zeng's extreme loss in the predictor, in the
+# diffusion loss, or in both. CV fold 0 is a development set (ctp_only_decisions.md #29);
+# ISLES 2018 is not touched.
+#
+#   1. Pretrain the three BRANs (about 1-3 h each, H100):   PRE_L1  PRE_EXT  PRE_LOW
+#   2. Score them alone on fold 0's held-out cases (14958):   CHECK_PRE
+#   3. Train MRDPM with them (about 20 h each, H100):          TRAIN_L1  TRAIN_EXT  TRAIN_EXT_DIFF  TRAIN_L1_DIFF
+#   4. Sample fold 0's held-out cases (about 6 h each, H100):  TEST_*, and TEST_BASE: today's MRDPM
+#      (gan_bpm's predictor), the control. If its fold-0 CV test exists already, delete every line
+#      that names TEST_BASE: the core check refuses two complete tests of one run.
+#   5. Score everything (14958):                              CHECK_ALL
+#
+# First, once each: the checks (bran_ext_plan.md §6: scripts/bran_ext_checks.py and
+# scripts/ctp_only_checks.py), then a debug pretraining and a debug training of one arm:
+#   condor_submit ctp_only_bran_pretrain_h100.sub -append 'variant = bran_l1'
+#   condor_submit ctp_only_train_h100.sub -append 'target = rcbf' -append 'variant = bran_l1'
+#
+#   cd /raid/colivares/github_repos/MRDPM-with-RAP_fork && git pull
+#   condor_q -run          # this account may hold 3 GPUs at once; going over gets jobs booted
+#   cd condor && mkdir -p log && condor_submit_dag ctp_only_bran_ext.dag
+#   condor_q -dag
+#   tail -f ctp_only_bran_ext.dag.dagman.out
+#
+# HOW MANY AT ONCE: MAXJOBS gpu 3 below counts only this DAG's jobs, and every node holds one GPU.
+# Count what else runs (gan_bpm's sweep, other tests) and lower it: `condor_submit_dag -maxjobs N`
+# can only lower it. With 3, the GPU part is about 2 days: the pretrainings, three trainings at
+# once, then the fourth beside the tests. The priorities run the paper's arm (L1) first.
+#
+# NO RETRY, as in the folds' DAGs: a retried training would restart from epoch 0 (a restarted job
+# resumes on its own; ctp_only_decisions.md #26). If a node fails, DAGMan finishes what doesn't
+# depend on it and writes ctp_only_bran_ext.dag.rescue001. Fix the cause, and resume a training by
+# hand from its last checkpoint on /radraid2 (ctp_only_train_h100.sub's header, with
+# -append 'target = rcbf' -append 'variant = <arm>'), or submit the same DAG again.
+#
+# A pretraining refuses to start if its BRAN exists on /radraid2 already, and so fails its node:
+# after a finished PRE_*, delete that node's lines before a resubmission (or use the rescue file).
+
+JOB      PRE_L1          ctp_only_bran_pretrain_h100.sub
+VARS     PRE_L1          variant="bran_l1" fold="0" mode="full" target="rcbf"
+JOB      PRE_EXT         ctp_only_bran_pretrain_h100.sub
+VARS     PRE_EXT         variant="bran_ext" fold="0" mode="full" target="rcbf"
+JOB      PRE_LOW         ctp_only_bran_pretrain_h100.sub
+VARS     PRE_LOW         variant="bran_extlow" fold="0" mode="full" target="rcbf"
+
+JOB      CHECK_PRE       ctp_only_core_check.sub
+VARS     CHECK_PRE       args="--gan-bpm-only --fold 0 --bran /radraid2/colivares/mrdpm_ctp_only/bran/rcbf_l1 --bran /radraid2/colivares/mrdpm_ctp_only/bran/rcbf_ext --bran /radraid2/colivares/mrdpm_ctp_only/bran/rcbf_extlow"
+
+JOB      TRAIN_L1        ctp_only_train_h100.sub
+VARS     TRAIN_L1        variant="bran_l1" fold="0" mode="full" target="rcbf"
+JOB      TRAIN_EXT       ctp_only_train_h100.sub
+VARS     TRAIN_EXT       variant="bran_ext" fold="0" mode="full" target="rcbf"
+JOB      TRAIN_EXT_DIFF  ctp_only_train_h100.sub
+VARS     TRAIN_EXT_DIFF  variant="bran_ext_diffext" fold="0" mode="full" target="rcbf"
+JOB      TRAIN_L1_DIFF   ctp_only_train_h100.sub
+VARS     TRAIN_L1_DIFF   variant="bran_l1_diffext" fold="0" mode="full" target="rcbf"
+
+JOB      TEST_BASE       ctp_only_test_h100.sub
+VARS     TEST_BASE       run="/radraid2/colivares/mrdpm_ctp_only/runs/train_ctp_only_f13_rcbf_fold0" testset="cv" mode="full"
+JOB      TEST_L1         ctp_only_test_h100.sub
+VARS     TEST_L1         run="/radraid2/colivares/mrdpm_ctp_only/runs/train_ctp_only_f13_rcbf_bran_l1_fold0" testset="cv" mode="full"
+JOB      TEST_EXT        ctp_only_test_h100.sub
+VARS     TEST_EXT        run="/radraid2/colivares/mrdpm_ctp_only/runs/train_ctp_only_f13_rcbf_bran_ext_fold0" testset="cv" mode="full"
+JOB      TEST_EXT_DIFF   ctp_only_test_h100.sub
+VARS     TEST_EXT_DIFF   run="/radraid2/colivares/mrdpm_ctp_only/runs/train_ctp_only_f13_rcbf_bran_ext_diffext_fold0" testset="cv" mode="full"
+JOB      TEST_L1_DIFF    ctp_only_test_h100.sub
+VARS     TEST_L1_DIFF    run="/radraid2/colivares/mrdpm_ctp_only/runs/train_ctp_only_f13_rcbf_bran_l1_diffext_fold0" testset="cv" mode="full"
+
+JOB      CHECK_ALL       ctp_only_core_check.sub
+VARS     CHECK_ALL       args="--fold 0 --variant bran_l1 --variant bran_ext --variant bran_ext_diffext --variant bran_l1_diffext --bran /radraid2/colivares/mrdpm_ctp_only/bran/rcbf_l1 --bran /radraid2/colivares/mrdpm_ctp_only/bran/rcbf_ext --bran /radraid2/colivares/mrdpm_ctp_only/bran/rcbf_extlow"
+
+PARENT PRE_L1 PRE_EXT PRE_LOW CHILD CHECK_PRE
+PARENT PRE_L1  CHILD TRAIN_L1 TRAIN_L1_DIFF
+PARENT PRE_EXT CHILD TRAIN_EXT TRAIN_EXT_DIFF
+PARENT TRAIN_L1 CHILD TEST_L1
+PARENT TRAIN_EXT CHILD TEST_EXT
+PARENT TRAIN_EXT_DIFF CHILD TEST_EXT_DIFF
+PARENT TRAIN_L1_DIFF CHILD TEST_L1_DIFF
+PARENT TEST_L1 TEST_EXT TEST_EXT_DIFF TEST_L1_DIFF PRE_LOW CHILD CHECK_ALL
+PARENT TEST_BASE CHILD CHECK_ALL
+
+# The paper's arm first, then the extreme loss in the predictor, then in both, then in L_diff alone;
+# the control's test waits for the GPUs the trainings leave.
+PRIORITY PRE_L1 50
+PRIORITY PRE_EXT 40
+PRIORITY PRE_LOW 30
+PRIORITY TRAIN_L1 50
+PRIORITY TRAIN_EXT 40
+PRIORITY TRAIN_EXT_DIFF 30
+PRIORITY TRAIN_L1_DIFF 20
+PRIORITY TEST_BASE 10
+
+CATEGORY PRE_L1 gpu
+CATEGORY PRE_EXT gpu
+CATEGORY PRE_LOW gpu
+CATEGORY CHECK_PRE gpu
+CATEGORY TRAIN_L1 gpu
+CATEGORY TRAIN_EXT gpu
+CATEGORY TRAIN_EXT_DIFF gpu
+CATEGORY TRAIN_L1_DIFF gpu
+CATEGORY TEST_BASE gpu
+CATEGORY TEST_L1 gpu
+CATEGORY TEST_EXT gpu
+CATEGORY TEST_EXT_DIFF gpu
+CATEGORY TEST_L1_DIFF gpu
+CATEGORY CHECK_ALL gpu
+MAXJOBS  gpu 3

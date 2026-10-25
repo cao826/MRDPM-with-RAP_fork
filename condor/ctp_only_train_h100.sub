@@ -14,6 +14,11 @@
 #   condor_submit ctp_only_train_h100.sub -append 'mode = full' \
 #       -append 'resume = /radraid2/colivares/mrdpm_ctp_only/runs/<experiment>/checkpoint/<epoch>'
 #   condor_submit ctp_only_train_h100.sub -append 'target = rcbf'      # rCBF, debug (tmax if not given)
+#   condor_submit ctp_only_train_h100.sub -append 'target = rcbf' -append 'variant = bran_l1' -append 'mode = full'
+#
+# `variant` (bran_ext_plan.md §5) trains config/ctp_only_f13_<target>_<variant>_fold0.json instead,
+# into train_ctp_only_f13_<target>_<variant>_fold<k>_<time>. Its BRAN must be pretrained first
+# (ctp_only_bran_pretrain_h100.sub); a debug run takes the debug BRAN if there is one.
 #
 #   tail -f log/ctp_only_train_h100.<cluster>.0.out
 universe                = docker
@@ -23,7 +28,7 @@ executable              = ctp_only_train_h100.sh
 arguments               = $(fold:0) $(mode:debug) $(Cluster).$(Process) $(resume:)
 # In the environment, not the arguments: resume may be empty, and a Tmax job reads the same
 # arguments it always did.
-environment             = "MRDPM_TARGET=$(target:tmax)"
+environment             = "MRDPM_TARGET=$(target:tmax) MRDPM_VARIANT=$(variant:none)"
 # No trailing slash: the checkout arrives in the workspace as MRDPM-with-RAP_fork/.
 transfer_input_files    = /raid/colivares/github_repos/MRDPM-with-RAP_fork
 should_transfer_files   = YES

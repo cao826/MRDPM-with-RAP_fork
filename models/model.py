@@ -13,6 +13,17 @@ class EMA():
         for current_params, ma_params in zip(current_model.parameters(), ma_model.parameters()):
             old_weight, up_weight = ma_params.data, current_params.data
             ma_params.data = self.update_average(old_weight, up_weight)
+        # bran_ext_plan.md §2.4: BRAN's BatchNorm statistics are buffers, not parameters. Without
+        # this the EMA copy, which the test samples with, keeps the pretraining's statistics under
+        # fine-tuned weights. Averaged as the weights are (timm's ModelEmaV2); the step count is
+        # copied. gan_bpm's generator and the U-Net have no such buffers, so nothing changes for them.
+        ma_buffers = dict(ma_model.named_buffers())
+        for name, buf in current_model.named_buffers():
+            if name in ma_buffers and ma_buffers[name].shape == buf.shape:
+                if buf.dtype.is_floating_point:
+                    ma_buffers[name].copy_(self.update_average(ma_buffers[name], buf))
+                else:
+                    ma_buffers[name].copy_(buf)
     def update_average(self, old, new):
         if old is None:
             return new
@@ -217,9 +228,10 @@ class Palette(BaseModel):
                             y_0=self.gt_image, mask=self.mask, sample_num=self.sample_num,target=self.gt_image)
                 # The initial predictor's map alone (saved as Init_): Out_ = Init_ + the sampled
                 # residual inside the mask. The predictor has no randomness in eval mode, so this
-                # second pass gives restoration's y_initial and draws no noise.
-                initial_net = net.module.initial_net if self.opt['distributed'] else net.initial_net
-                self.init_output = initial_net(self.cond_image)[0] * self.mask
+                # second pass gives restoration's y_initial and draws no noise. Network.initial gives
+                # the predictor the input it reads in restoration (masked for BRAN, whole for gan_bpm).
+                plain = net.module if self.opt['distributed'] else net
+                self.init_output = plain.initial(self.cond_image, self.mask)[0]
 
 
                 self.iter += self.batch_size

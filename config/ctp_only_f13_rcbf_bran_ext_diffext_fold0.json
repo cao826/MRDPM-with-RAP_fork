@@ -1,0 +1,192 @@
+{
+    // bran_ext_plan.md §5, arm bran_ext_diffext:
+    // bran_ext's BRAN, the extreme loss in L_init, and L_diff weighted the same way.
+    // ctp_only_f13_rcbf_fold0.json with only these changed: the name, initial_predictor (BRAN, not
+    // gan_bpm's generator) and diffusion_ext; scripts/bran_ext_checks.py refuses any other difference.
+    // Its BRAN is pretrained first (condor/ctp_only_bran_pretrain_h100.sub, variant = bran_ext), into
+    // the checkpoint below (fold 0; the jobs swap in fold_<k>). Paths are 14958's.
+    "name": "ctp_only_f13_rcbf_bran_ext_diffext_fold0",
+    "gpu_ids": [0],
+    "seed" : -1,
+    "finetune_norm": false,
+
+    "path": {
+        "base_dir": "/radraid2/colivares/mrdpm_ctp_only/experiments",
+        "code": "code",
+        "tb_logger": "tb_logger",
+        "results": "results",
+        "checkpoint": "checkpoint",
+        "resume_state": null
+    },
+
+    "datasets": {
+        "train": {
+            "which_dataset": {
+                "name": ["data.dataset", "MCTPDataset_mask"],
+                "args": {
+                    "mctp_root": "/raid/colivares/mctp_dataset_f13_isles24_ucla_v2",
+                    "gan_bpm_root": "/raid/colivares/github_repos/gan_bpm",
+                    "split_json": "/radraid2/colivares/matrix/gan_bpm_rcbf_f13uclav2_adv0_k5/fold_0/split.json",
+                    "part": "train",
+                    "label_type": "rcbf",
+                    "tmax_ceiling": 12.0 // unused for rCBF: its bounds are (0, 2)
+                }
+            },
+            "which_val_dataset": { // the monitor set, carved from the training cases (§9)
+                "name": ["data.dataset", "MCTPDataset_mask"],
+                "args": {
+                    "mctp_root": "/raid/colivares/mctp_dataset_f13_isles24_ucla_v2",
+                    "gan_bpm_root": "/raid/colivares/github_repos/gan_bpm",
+                    "split_json": "/radraid2/colivares/matrix/gan_bpm_rcbf_f13uclav2_adv0_k5/fold_0/split.json",
+                    "part": "monitor",
+                    "label_type": "rcbf",
+                    "tmax_ceiling": 12.0, // unused for rCBF: its bounds are (0, 2)
+                    "monitor_cases_per_dataset": 1, // must match what "train" uses (the default)
+                    "monitor_max_slices": 16 // one batch on the H100, every val_epoch (decisions #12)
+                }
+            },
+            "dataloader":{
+                "validation_split": 0, // unused: which_val_dataset replaces it
+                "args":{
+                    "batch_size": 4, // the paper's batch size (decisions #11)
+                    "num_workers": 8,
+                    "shuffle": true,
+                    "pin_memory": true,
+                    "drop_last": true
+                },
+                "val_args":{
+                    "batch_size": 16, // sampling only: 39.7 GiB on the H100
+                    "num_workers": 4,
+                    "shuffle": false,
+                    "pin_memory": true,
+                    "drop_last": false
+                }
+            }
+        },
+        "test": {
+            "which_dataset": { // gan_bpm's held-out fold 0
+                "name": ["data.dataset", "MCTPDataset_mask"],
+                "args": {
+                    "mctp_root": "/raid/colivares/mctp_dataset_f13_isles24_ucla_v2",
+                    "gan_bpm_root": "/raid/colivares/github_repos/gan_bpm",
+                    "split_json": "/radraid2/colivares/matrix/gan_bpm_rcbf_f13uclav2_adv0_k5/fold_0/split.json",
+                    "part": "test",
+                    "label_type": "rcbf",
+                    "tmax_ceiling": 12.0 // unused for rCBF: its bounds are (0, 2)
+                }
+            },
+            "dataloader":{
+                "args":{
+                    "batch_size": 16, // sampling only
+                    "num_workers": 4,
+                    "pin_memory": true
+                }
+            }
+        }
+    },
+
+    "model": {
+        "which_model": {
+            "name": ["models.model", "Palette"],
+            "args": {
+                "sample_num": 4,
+                "task": "my_mission_mask",
+                "test_ema": true, // the test phase samples with the EMA weights (ctp_only_eval_plan.md §4)
+                "ema_scheduler": {
+                    "ema_start": 1,
+                    "ema_iter": 1,
+                    "ema_decay": 0.9999
+                },
+                "optimizers": [
+                    { "lr": 5e-5, "weight_decay": 0}
+                ],
+                "health_log": { // models/health.py; label_scale = rCBF's ceiling, 2, so errors are in rCBF
+                    "label_scale": 2.0,
+                    "unit": "rCBF",
+                    "panels": 4
+                }
+            }
+        },
+        "which_networks": [
+            {
+                "name": ["models.network", "Network"],
+                "args": {
+                    "init_type": "kaiming",
+                    "module_name": "guided_diffusion",
+                    "initial_predictor": {
+                        "type": "bran", // the paper's Brain Region-Aware Network (models/bran_predictor.py)
+                        "checkpoint": "/radraid2/colivares/mrdpm_ctp_only/bran/rcbf_ext/fold_0/bran_G.pth",
+                        "in_channels": 3, // the 3 CTP phases; upstream's 4 included NCCT
+                        "target": "rcbf",
+                        "expect_fold": 0, // the fold of split_json above
+                        "mask_cond": true, // BRAN reads the condition x envelope: the paper's skull-stripped input
+                        "ext": {"weight": 1.0, "side": "both"}, // Zeng's extreme loss, W = (2 gt - 1)^2, at lambda_ext = 50 (weight = lambda_ext / 50): in pretraining and in L_init
+                        "pretrain": {"epochs": 50, "batch_size": 4, "lr": 2e-4, "betas": [0.5, 0.999], "init": "normal", "init_gain": 0.02} // the upstream README: 50 epochs of Adam, LR linear to 0; the rest pix2pix's defaults (bran_ext_plan.md §2.2)
+                    },
+                    "mask_unet_cond": true, // the U-Net's condition x envelope (BRAN's is masked too: mask_cond)
+                    "zero_hole_residual": true, // the residual is 0 at no-data voxels in training (§18)
+                    "diffusion_ext": {"weight": 1.0, "side": "both"}, // L_diff's voxels weighted 1 + W: the extreme loss on each step's estimate of the final map (bran_ext_plan.md §3.3)
+                    "unet": {
+                        "in_channel": 4, // 3 CTP phases + the noisy residual
+                        "out_channel": 1,
+                        "inner_channel": 64,
+                        "channel_mults": [
+                            1,
+                            2,
+                            4,
+                            8
+                        ],
+                        "attn_res": [
+                            16
+                        ],
+                        "num_head_channels": 32,
+                        "res_blocks": 2,
+                        "dropout": 0.2,
+                        "image_size": 512,
+                        "mirror_hs": false // our scans aren't aligned, so no asymmetry flip (ctp_only_decisions.md)
+                    },
+                    "beta_schedule": {
+                        "train": {
+                            "schedule": "linear",
+                            "n_timestep": 1000,
+                            "linear_start": 1e-6,
+                            "linear_end": 0.01
+                        },
+                        "test": {
+                            "schedule": "linear",
+                            "n_timestep": 1000,
+                            "linear_start": 1e-6,
+                            "linear_end": 0.01
+                        }
+                    }
+                }
+            }
+        ],
+        "which_losses": [
+            "mse_loss"
+        ],
+        "which_metrics": [
+            "mae"
+        ],
+        "which_lr_schedulers": [
+    ]
+    },
+
+    "train": {
+        "n_epoch": 200,
+        "n_iter": 1e8,
+        "val_epoch": 10,
+        "save_checkpoint_epoch": 10,
+        "log_iter": 2000,
+        "tensorboard" : false
+    },
+
+    "debug": { // run.py -d: one epoch on 4 training slices (one batch), then a monitor pass on 2 slices
+        "n_epoch": 0, // the loop runs while epoch <= n_epoch, so 0 is one epoch
+        "val_epoch": 1,
+        "save_checkpoint_epoch": 1,
+        "log_iter": 1,
+        "debug_split": 4, // a whole batch: the train loader drops an incomplete one
+        "debug_val_split": 2
+    }
+}

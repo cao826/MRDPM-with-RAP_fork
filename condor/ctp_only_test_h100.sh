@@ -2,7 +2,9 @@
 # Invoked by ctp_only_test_h100.sub as: ctp_only_test_h100.sh RUN TESTSET MODE JOBID [EPOCH]
 #   RUN      a training run folder on /radraid2, e.g.
 #            /radraid2/colivares/mrdpm_ctp_only/runs/train_ctp_only_f13_tmax_fold0_261019_202928;
-#            its name gives the target and the fold (or all)
+#            its name gives the target, the arm (bran_ext_plan.md §5: ..._f13_rcbf_bran_l1_fold0_...)
+#            and the fold (or all). Or the name without its _<date>_<time>, as a DAG written before
+#            the training ran gives it: the one folder of that name with checkpoint EPOCH is used.
 #   TESTSET  cv: the fold's held-out cases (folds 0-4 only). isles18: all 94 ISLES 2018 scans.
 #   MODE     debug: run.py -d (the first 4 slices). full: every slice.
 #   JOBID    Condor's cluster.process: names this job's folder on /home.
@@ -44,11 +46,22 @@ case "$MODE" in
 esac
 [ -n "$RUN" ] && [ "$RUN" != none ] || fail "give the training run: -append 'run = /radraid2/colivares/mrdpm_ctp_only/runs/<folder>'"
 RUN="${RUN%/}"
+RUN_NAME='^(train|debug)_ctp_only_f13_(tmax|rcbf)_(([a-z0-9_]+)_)?(fold[0-4]|all)_[0-9]{6}_[0-9]{6}$'
+if [ ! -d "$RUN" ]; then
+    # a name without its time: the one such folder that has the checkpoint (a run Condor restarted
+    # also left an earlier attempt's folder, which never got there)
+    found=()
+    for d in "$RUN"_[0-9]*_[0-9]*; do
+        [[ "$(basename "$d")" =~ $RUN_NAME ]] && [ -f "$d/checkpoint/${EPOCH}_Network_ema.pth" ] && found+=("$d")
+    done
+    [ "${#found[@]}" = 1 ] || fail "${#found[@]} folders ${RUN}_<date>_<time> have checkpoint $EPOCH: ${found[*]:-none}"
+    RUN="${found[0]}"
+fi
 name=$(basename "$RUN")
-[[ "$name" =~ ^(train|debug)_ctp_only_f13_(tmax|rcbf)_(fold[0-4]|all)_[0-9]{6}_[0-9]{6}$ ]] \
-    || fail "$name is not a ctp-only training run folder"
+[[ "$name" =~ $RUN_NAME ]] || fail "$name is not a ctp-only training run folder"
 TARGET="${BASH_REMATCH[2]}"
-FOLD="${BASH_REMATCH[3]#fold}"
+VARIANT="${BASH_REMATCH[4]:-none}"
+FOLD="${BASH_REMATCH[5]#fold}"
 
 case "$TARGET" in
     tmax) GAN_RUN="$STAGE/gan_run"; STAGED="$STAGE/STAGED_OK" ;;
@@ -63,13 +76,15 @@ else
     RUN_SUB="fold_$FOLD"
     CONFIG="$CODE/config/ctp_only_f13_${TARGET}_fold0.json"
 fi
+[ "$VARIANT" = none ] || CONFIG="$CODE/config/ctp_only_f13_${TARGET}_${VARIANT}_fold0.json"
+[ -f "$CONFIG" ] || fail "no $CONFIG for $name"
 case "$TESTSET" in
     cv) [ "$FOLD" != all ] || fail "an all-data model trained on every CV case: test it on isles18 only" ;;
     isles18) [ -f "$STAGE/STAGED_OK_isles18" ] || fail "no $STAGE/STAGED_OK_isles18: run ctp_only_stage_isles18.sub first" ;;
     *) fail "testset must be cv or isles18, not '$TESTSET'" ;;
 esac
 
-say "host: $(hostname)   date: $(date -Is)   run $name   target $TARGET   fold $FOLD   test set $TESTSET   mode $MODE   epoch $EPOCH   job $JOBID"
+say "host: $(hostname)   date: $(date -Is)   run $name   target $TARGET   variant $VARIANT   fold $FOLD   test set $TESTSET   mode $MODE   epoch $EPOCH   job $JOBID"
 nvidia-smi -L || echo "(nvidia-smi -L failed)"
 n_gpus=$(env -u CUDA_VISIBLE_DEVICES python -c "import torch; print(torch.cuda.device_count())")
 [ "$n_gpus" = 1 ] || fail "the container sees $n_gpus GPUs; run.py would take GPU 0, which may not be this job's"
@@ -92,10 +107,10 @@ printf '{"run": "%s", "epoch": %s, "ema_sha256": "%s", "testset": "%s", "mode": 
 echo "==================================================================="
 echo "1. the job's config"
 python - "$CONFIG" "$W/job_config.json" "$STAGE" "$EXP_BASE" "$FOLD" "$H/resume/$JOBID/$EPOCH" \
-    "$TARGET" "$GAN_RUN/$RUN_SUB" "$TESTSET" <<'PYEOF' || fail "writing the job config"
+    "$TARGET" "$GAN_RUN/$RUN_SUB" "$TESTSET" "$VARIANT" <<'PYEOF' || fail "writing the job config"
 import json, sys
 from pathlib import Path
-src, dst, stage, base, fold, resume, target, run, testset = sys.argv[1:]
+src, dst, stage, base, fold, resume, target, run, testset, variant = sys.argv[1:]
 cfg = json.loads("".join(line.split("//")[0] + "\n" for line in open(src)))    # as core/praser.py reads it
 gan = f"{stage}/gan_bpm"
 if testset == "cv":
@@ -108,13 +123,19 @@ args.update(gan_bpm_root=gan, part="test", **test)
 if not cfg["model"]["which_model"]["args"].get("test_ema"):
     sys.exit("the config doesn't set test_ema: the evaluation tests the EMA weights")
 ip = cfg["model"]["which_networks"][0]["args"]["initial_predictor"]
-checkpoint = f"{run}/checkpoints/{Path(ip['checkpoint']).name}"     # the predictor is rebuilt, then overwritten by the checkpoint
-if not Path(checkpoint).is_file():
-    sys.exit(f"{checkpoint} isn't staged")
-ip.update(gan_bpm_root=gan, checkpoint=checkpoint)
-if fold != "all":
-    ip["expect_fold"] = int(fold)
-cfg["name"] = f"ctp_only_f13_{target}_" + ("all" if fold == "all" else f"fold{fold}") + f"_{testset}"
+if ip.get("type") == "bran":
+    # the test phase never reads BRAN's pretraining checkpoint: its fine-tuned weights are in the
+    # MRDPM checkpoint (bran_ext_plan.md §2.4)
+    ip.update(checkpoint=None, expect_fold=int(fold))
+else:
+    checkpoint = f"{run}/checkpoints/{Path(ip['checkpoint']).name}"     # the predictor is rebuilt, then overwritten by the checkpoint
+    if not Path(checkpoint).is_file():
+        sys.exit(f"{checkpoint} isn't staged")
+    ip.update(gan_bpm_root=gan, checkpoint=checkpoint)
+    if fold != "all":
+        ip["expect_fold"] = int(fold)
+cfg["name"] = (f"ctp_only_f13_{target}_" + (f"{variant}_" if variant != "none" else "")
+               + ("all" if fold == "all" else f"fold{fold}") + f"_{testset}")
 cfg["path"].update(base_dir=base, resume_state=resume)
 json.dump(cfg, open(dst, "w"), indent=1)
 print(f"name {cfg['name']}, test {args['mctp_root']} / {args['split_json']}, resume_state {resume}")

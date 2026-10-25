@@ -8,23 +8,34 @@ from core.base_network import BaseNetwork
 import torch.nn.functional as F
 from torchviz import make_dot
 from .networks_unet256 import define_G
+from .loss import ext_term, ext_weight
 import pydot_ng
 class Network(BaseNetwork):
     def __init__(self, unet, beta_schedule, module_name='sr3', initial_predictor=None, mask_unet_cond=False,
-                 zero_hole_residual=False, **kwargs):
+                 zero_hole_residual=False, diffusion_ext=None, **kwargs):
         super(Network, self).__init__(**kwargs)
 
         from .guided_diffusion_modules.unet import UNet
+        from .bran_predictor import normalize_ext
 
-        
+
         # 显示模型结构
         self.denoise_fn = UNet(**unet)
+        # bran_ext_plan.md §3: the predictor's `ext` adds Zeng's extreme loss to L_init (and, for
+        # BRAN, was in its pretraining loss too); `diffusion_ext` weights L_diff's voxels the same way
+        predictor_args = {k: v for k, v in (initial_predictor or {}).items() if k not in ('type', 'ext')}
+        self.predictor_ext = normalize_ext((initial_predictor or {}).get('ext'))
+        self.diffusion_ext = normalize_ext(diffusion_ext)
         if initial_predictor is None:
             self.initial_net = define_G(4,1,32,use_dropout=True,gpu_ids=[0])
         elif initial_predictor['type'] == 'gan_bpm':
             # ctp_only_plan.md §8: gan_bpm's generator, loaded from its checkpoint
             from .gan_bpm_predictor import GanBpmInitialPredictor
-            self.initial_net = GanBpmInitialPredictor(**{k: v for k, v in initial_predictor.items() if k != 'type'})
+            self.initial_net = GanBpmInitialPredictor(**predictor_args)
+        elif initial_predictor['type'] == 'bran':
+            # bran_ext_plan.md §2: the paper's BRAN on the 3 CTP phases, pretrained by scripts/pretrain_bran.py
+            from .bran_predictor import BranInitialPredictor
+            self.initial_net = BranInitialPredictor(ext=initial_predictor.get('ext'), **predictor_args)
         else:
             raise NotImplementedError('initial_predictor type [{}] is not implemented'.format(initial_predictor['type']))
         # ctp_only_plan.md §7.1: the predictor reads the whole condition, the U-Net only its masked copy
@@ -44,6 +55,13 @@ class Network(BaseNetwork):
 
     def unet_cond(self, y_cond, mask):
         return y_cond * mask if self.mask_unet_cond else y_cond
+
+    def initial(self, y_cond, mask):
+        """The initial predictor's map × mask, and its features. BRAN with `mask_cond` reads the
+        condition × mask (the paper's skull-stripped input); gan_bpm's generator reads it whole (§7.1)."""
+        x = y_cond * mask if getattr(self.initial_net, 'mask_cond', False) else y_cond
+        y_initial, init_cond = self.initial_net(x)
+        return y_initial * mask, init_cond
 
     def set_loss(self, loss_fn):
         self.loss_fn = loss_fn
@@ -116,8 +134,7 @@ class Network(BaseNetwork):
     @torch.no_grad()
     def restoration(self, y_cond, y_t=None, y_0=None, mask=None, sample_num=8, target=None):
         b, *_ = y_cond.shape
-        y_initial,init_cond = self.initial_net(y_cond)
-        y_initial = y_initial*mask
+        y_initial,init_cond = self.initial(y_cond, mask)
         unet_cond = self.unet_cond(y_cond, mask)
         assert self.num_timesteps > sample_num, 'num_timesteps must greater than sample_num'
         sample_inter = (self.num_timesteps//sample_num)
@@ -201,8 +218,7 @@ class Network(BaseNetwork):
         sample_gammas = gamma_t1
         sample_gammas = sample_gammas.view(b, -1)
 
-        y_initial,init_cond = self.initial_net(y_cond)
-        y_initial = y_initial*mask
+        y_initial,init_cond = self.initial(y_cond, mask)
         y_res = (y_0 - y_initial)*(loss_mask if self.zero_hole_residual and loss_mask is not None else mask)
 
         noise = default(noise, lambda: torch.randn_like(y_0))
@@ -211,12 +227,25 @@ class Network(BaseNetwork):
         if mask is not None:
             noise_hat = self.denoise_fn(torch.cat([self.unet_cond(y_cond, mask), y_noisy*mask+(1.-mask)*y_0], dim=1), sample_gammas, init_cond)
             if loss_mask is None:
+                if self.predictor_ext or self.diffusion_ext:
+                    raise ValueError('the extreme loss needs loss_mask (MCTPDataset_mask sends it)')
                 loss = self.loss_fn(mask*noise, mask*noise_hat) + self.loss_initial(y_0, y_initial)*0.1
             else:
                 # ctp_only_plan.md §7.2: no-data voxels keep their noise and U-Net input but leave the loss
                 loss_diff = self.loss_fn(loss_mask*noise, loss_mask*noise_hat)
                 loss_init = self.loss_initial(loss_mask*y_0, loss_mask*y_initial)
-                self.loss_terms = {'loss_diff': loss_diff.detach(), 'loss_init': loss_init.detach()}  # for models/health.py
+                terms = {}
+                # bran_ext_plan.md §3: Zeng's extreme loss on the predictor's map, and its analogue on
+                # the noise: (ε − ε̂)² is the SNR times the squared error of the step's estimate of the
+                # final map, so weighting it by W(y_0) is the extreme loss on that estimate
+                if self.predictor_ext:
+                    terms['loss_init_ext'] = ext_term(y_initial, y_0, ext_weight(y_0, self.predictor_ext['side']), loss_mask)
+                    loss_init = loss_init + self.predictor_ext['weight'] * terms['loss_init_ext']
+                if self.diffusion_ext:
+                    terms['loss_diff_ext'] = ext_term(noise_hat, noise, ext_weight(y_0, self.diffusion_ext['side']), loss_mask)
+                    loss_diff = loss_diff + self.diffusion_ext['weight'] * terms['loss_diff_ext']
+                self.loss_terms = {'loss_diff': loss_diff.detach(), 'loss_init': loss_init.detach(),
+                                   **{k: v.detach() for k, v in terms.items()}}  # for models/health.py
                 loss = loss_diff + loss_init*0.1
         else:
             noise_hat = self.denoise_fn(torch.cat([y_cond, y_noisy], dim=1), sample_gammas, init_cond)

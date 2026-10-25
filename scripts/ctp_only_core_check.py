@@ -44,6 +44,16 @@ is compared with it per scan, and the pre-declared pick rule of that plan's §1.
         --run-dir /radraid2/colivares/matrix/gan_bpm_rcbf_f13uclav2_adv0_ext50_e40_f0 \\
         --run-dir /radraid2/colivares/matrix/gan_bpm_rcbf_f13uclav2_adv0_ext200_e40_f0 \\
         --run-dir /radraid2/colivares/matrix/gan_bpm_rcbf_f13uclav2_adv0_ext500_e40_f0
+
+The BRAN arms (bran_ext_plan.md §5). --variant scores an arm's CV test (Out_ as mrdpm_<arm>, Init_
+as mrdpm_<arm>_init) beside today's MRDPM (mrdpm, when its test exists). --bran scores a pretrained
+BRAN alone (bran_<name>) from the held-out maps scripts/pretrain_bran.py saved, before any
+diffusion. Every map is scored on the slices all of them have. With two or more of either, the
+first is the control of the same pre-declared pick rule:
+
+    python scripts/ctp_only_core_check.py --gan-bpm-only --fold 0 \\
+        --bran /radraid2/colivares/mrdpm_ctp_only/bran/rcbf_l1 --bran /radraid2/colivares/mrdpm_ctp_only/bran/rcbf_ext
+    python scripts/ctp_only_core_check.py --fold 0 --variant bran_l1 --variant bran_ext
 """
 import argparse
 import json
@@ -62,7 +72,10 @@ import ctp_only_isles18_maps as M                                       # noqa: 
 
 CV_ROOT = Path("/raid/colivares/mctp_dataset_f13_isles24_ucla_v2")
 OUT = Path("/radraid2/colivares/mrdpm_ctp_only/cv_core_check")
-TEST_NAME = re.compile(r"^test_ctp_only_f13_(tmax|rcbf)_fold([0-4])_cv_\d{6}_\d{6}$")
+# an arm's runs carry its name before the fold (bran_ext_plan.md §5); today's MRDPM has none
+TEST_NAME = re.compile(r"^test_ctp_only_f13_(tmax|rcbf)_(?:([a-z0-9_]+?)_)?fold([0-4])_cv_\d{6}_\d{6}$")
+TRAIN_NAME = re.compile(r"^train_ctp_only_f13_(tmax|rcbf)_(?:([a-z0-9_]+?)_)?(fold[0-4]|all)_\d{6}_\d{6}$")
+INIT_FILE = re.compile(r"^Init_(.+)_slice(\d+)\.npy$")
 SWEEP = {"rcbf": (0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
          "tmax": (2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0)}
 SIZE_BINS_ML = (0.0, 5.0, 15.0, 50.0, math.inf)
@@ -101,8 +114,9 @@ def read_cv_test(folder, epoch):
     folder = Path(folder)
     m = TEST_NAME.match(folder.name)
     if not m:
-        raise M.Blocked(f"{folder.name} is not a CV test folder (test_ctp_only_f13_<target>_fold<k>_cv_<time>)")
-    target, fold = m.group(1), int(m.group(2))
+        raise M.Blocked(f"{folder.name} is not a CV test folder (test_ctp_only_f13_<target>[_<arm>]_fold<k>_cv_<time>)")
+    target, variant, fold = m.group(1), m.group(2), int(m.group(3))
+    arm = f"{variant}_" if variant else ""
     for name in ("job_config.json", "source_run.json", "ddim_test.txt"):
         if not (folder / name).is_file():
             raise M.Blocked(f"{folder.name}: no {name} (ddim_test.txt: run.py writes it after the last slice)")
@@ -110,7 +124,7 @@ def read_cv_test(folder, epoch):
     src = json.loads((folder / "source_run.json").read_text())
     args = cfg["datasets"]["test"]["which_dataset"]["args"]
     problems = []
-    if cfg.get("name") != f"ctp_only_f13_{target}_fold{fold}_cv":
+    if cfg.get("name") != f"ctp_only_f13_{target}_{arm}fold{fold}_cv":
         problems.append(f"job config name {cfg.get('name')}")
     if args.get("label_type") != target or args.get("part") != "test" \
             or not str(args.get("split_json", "")).endswith(f"fold_{fold}/split.json"):
@@ -120,9 +134,9 @@ def read_cv_test(folder, epoch):
     if (src.get("testset"), src.get("mode"), int(src.get("epoch", -1))) != ("cv", "full", epoch):
         problems.append(f"source_run says {src.get('testset')} / {src.get('mode')} / epoch {src.get('epoch')}")
     run = Path(src.get("run", ""))
-    t = M.TRAIN_NAME.match(run.name)
-    if not t or (t.group(1), t.group(2)) != (target, f"fold{fold}"):
-        problems.append(f"made from {run.name}, not a {target} fold {fold} training run")
+    t = TRAIN_NAME.match(run.name)
+    if not t or t.groups() != (target, variant, f"fold{fold}"):
+        problems.append(f"made from {run.name}, not a {target} {arm}fold {fold} training run")
     ema = run / "checkpoint" / f"{epoch}_Network_ema.pth"
     if not ema.is_file():
         problems.append(f"{ema} is gone")
@@ -133,16 +147,25 @@ def read_cv_test(folder, epoch):
         problems.append(f"results/test/ holds {len(results)} folders, expected one")
     if problems:
         raise M.Blocked(f"{folder.name}: " + "; ".join(problems))
-    return {"folder": folder, "target": target, "fold": fold, "results": results[0], "source": src}
+    return {"folder": folder, "target": target, "variant": variant, "fold": fold, "results": results[0],
+            "source": src}
 
 
-def find_cv_tests(runs, target, folds, epoch):
-    """{fold: info} for every fold with one complete CV test folder; refuses two."""
+def map_name(variant):
+    """An MRDPM test's map: mrdpm for today's model, mrdpm_<arm> for an arm's."""
+    return "mrdpm" if variant is None else f"mrdpm_{variant}"
+
+
+def find_cv_tests(runs, target, folds, epoch, variant=None):
+    """{fold: info} for every fold with one complete CV test folder of `variant` (None: today's
+    MRDPM); refuses two."""
     found = {}
-    for folder in sorted(runs.glob(f"test_ctp_only_f13_{target}_fold*_cv_*")):
+    arm = f"{variant}_" if variant else ""
+    for folder in sorted(runs.glob(f"test_ctp_only_f13_{target}_{arm}fold*_cv_*")):
         m = TEST_NAME.match(folder.name)
-        if m and folder.is_dir() and (folder / "ddim_test.txt").is_file() and int(m.group(2)) in folds:
-            found.setdefault(int(m.group(2)), []).append(folder)
+        if m and m.group(2) == variant and folder.is_dir() and (folder / "ddim_test.txt").is_file() \
+                and int(m.group(3)) in folds:
+            found.setdefault(int(m.group(3)), []).append(folder)
     for k, folders in found.items():
         if len(folders) > 1:
             raise M.Blocked(f"fold {k}: {len(folders)} complete CV test folders "
@@ -207,6 +230,59 @@ def scan_rows(case, maps, scale, target, region, fold):
     return base, rows
 
 
+def saved_slice(case, k, s, folder, stem, prefix):
+    """The `prefix` map saved for slice `s` (row k of `case`), after its GT_ and Mask_ beside it
+    are checked against the scan: a map on the wrong slice or the wrong brain is refused."""
+    o, g, mk = (np.load(folder / f"{pre}{stem}").astype(np.float32) for pre in (prefix, "GT_", "Mask_"))
+    env = case.envelope[k]
+    if mk.shape != env.shape or not np.array_equal(mk.astype(bool), env) or not np.array_equal(mk, mk.astype(bool)):
+        raise M.Blocked(f"{case.case_id} slice {s}: Mask_ is not the scan's envelope ({folder})")
+    err = float(np.abs(2 * g[env] - 1 - case.labels[k][env]).max()) if env.any() else 0.0
+    if err > M.GT_TOL:
+        raise M.Blocked(f"{case.case_id} slice {s}: 2·GT_ − 1 differs from the label by {err:.2e} ({folder})")
+    if not np.isfinite(o).all():
+        raise M.Blocked(f"{case.case_id} slice {s}: {prefix} is not finite ({folder})")
+    return o
+
+
+def init_slices_in(folder):
+    """{case_id: {slice_idx: Init_ path}}, as M.slices_in reads Out_."""
+    out = {}
+    for p in folder.glob("Init_*.npy"):
+        m = INIT_FILE.match(p.name)
+        if m:
+            out.setdefault(m.group(1), {})[int(m.group(2))] = p
+    return out
+
+
+def read_bran(folder, fold, target, held, train, cv_root, allow_debug):
+    """A pretrained BRAN's fold (scripts/pretrain_bran.py's fold_<k>/): {case: {slice: Init_ path}},
+    or None when it has no such fold. Refuses one of another target, fold or data, one that
+    trained on a held-out case, and a debug run unless `allow_debug`."""
+    d = Path(folder) / f"fold_{fold}"
+    if not (d / "bran_G.pth").is_file():
+        return None
+    meta = json.loads((d / "meta.json").read_text())
+    problems = []
+    if (meta.get("target"), meta.get("fold")) != (target, fold):
+        problems.append(f"target / fold {meta.get('target')} / {meta.get('fold')}")
+    if not str(meta.get("split_json", "")).endswith(f"fold_{fold}/split.json"):
+        problems.append(f"split {meta.get('split_json')}")
+    if Path(str(meta.get("mctp_root", ""))).name != Path(cv_root).name:
+        problems.append(f"trained on {meta.get('mctp_root')}, not {Path(cv_root).name}")
+    if set(map(str, meta.get("train_case_ids", []))) & set(held):
+        problems.append("trained on held-out cases")
+    if not set(map(str, meta.get("train_case_ids", []))) <= set(train):
+        problems.append("trained on cases outside the fold's training cases")
+    if not set(map(str, meta.get("heldout_case_ids", []))) <= set(held):
+        problems.append("maps cases outside the fold's held-out set")
+    if meta.get("debug") and not allow_debug:
+        problems.append("a debug pretraining (--allow-debug-bran)")
+    if problems:
+        raise M.Blocked(f"{d}: " + "; ".join(problems))
+    return init_slices_in(d / "heldout")
+
+
 def mrdpm_slices(info, case, have):
     """The case's slices that MRDPM sampled, and its Out_ and Init_ there (Init_ None when
     the test didn't save it). Refuses a Mask_ that isn't the envelope or a GT_ that isn't
@@ -217,15 +293,7 @@ def mrdpm_slices(info, case, have):
         if not keep[k]:
             continue
         p = have[s]
-        o, g, mk = (np.load(p.parent / f"{pre}{p.name[4:]}").astype(np.float32) for pre in ("Out_", "GT_", "Mask_"))
-        env = case.envelope[k]
-        if mk.shape != env.shape or not np.array_equal(mk.astype(bool), env) or not np.array_equal(mk, mk.astype(bool)):
-            raise M.Blocked(f"{case.case_id} slice {s}: Mask_ is not the scan's envelope")
-        err = float(np.abs(2 * g[env] - 1 - case.labels[k][env]).max()) if env.any() else 0.0
-        if err > M.GT_TOL:
-            raise M.Blocked(f"{case.case_id} slice {s}: 2·GT_ − 1 differs from the label by {err:.2e}")
-        if not np.isfinite(o).all():
-            raise M.Blocked(f"{case.case_id} slice {s}: Out_ is not finite")
+        o = saved_slice(case, k, s, p.parent, p.name[4:], "Out_")
         out.append(o)
         i = p.parent / f"Init_{p.name[4:]}"
         init.append(np.load(i).astype(np.float32) if i.is_file() else None)
@@ -343,6 +411,13 @@ def main(argv=None):
                    help="another gan_bpm run_cv folder to score (e.g. the λ_ext pilots), named by its "
                         "folder; with two or more, the first is the control of the pick (§1.4)")
     p.add_argument("--run-checkpoint", default="last.pt", help="the --run-dir runs' checkpoint (last.pt)")
+    p.add_argument("--variant", action="append", default=[],
+                   help="an arm's CV test to score too (bran_ext_plan.md §5), e.g. bran_l1; with two or "
+                        "more, the first is the control of the pick")
+    p.add_argument("--bran", action="append", type=Path, default=[],
+                   help="a pretrained BRAN's folder (/radraid2/colivares/mrdpm_ctp_only/bran/<name>), scored "
+                        "alone from its held-out maps; with two or more, the first is the control of the pick")
+    p.add_argument("--allow-debug-bran", action="store_true", help="score a debug pretraining too")
     p.add_argument("--fold", action="append", type=int, choices=M.FOLDS, help="default: every fold with a test")
     p.add_argument("--gan-bpm", type=Path, default=M.GAN_BPM, help="gan_bpm's checkout, read only")
     p.add_argument("--cv-root", type=Path, default=CV_ROOT)
@@ -372,17 +447,34 @@ def main(argv=None):
 
     try:
         folds = args.fold or list(M.FOLDS)
+        # {fold: {map name: test info}}; an empty dict scores gan_bpm (and --bran) alone on that fold
         if args.gan_bpm_only:
-            tests = {k: None for k in folds}
+            tests = {k: {} for k in folds}
         elif args.test_folder:
-            tests = {i["fold"]: i for i in (read_cv_test(f, args.epoch) for f in args.test_folder)}
+            tests = {}
+            for i in (read_cv_test(f, args.epoch) for f in args.test_folder):
+                if map_name(i["variant"]) in tests.setdefault(i["fold"], {}):
+                    raise M.Blocked(f"fold {i['fold']}: two test folders of {map_name(i['variant'])}")
+                tests[i["fold"]][map_name(i["variant"])] = i
         else:
-            tests = find_cv_tests(args.runs, target, folds, args.epoch)
-        if any(i is not None and i["target"] != target for i in tests.values()):
+            tests = {}
+            for variant in [None] + args.variant:
+                found = find_cv_tests(args.runs, target, folds, args.epoch, variant)
+                if variant is not None and not found:
+                    raise M.Blocked(f"no complete {target} CV test of {variant} under {args.runs} for folds {folds}")
+                for k, i in found.items():
+                    tests.setdefault(k, {})[map_name(variant)] = i
+        if any(i["target"] != target for t in tests.values() for i in t.values()):
             raise M.Blocked(f"a test folder isn't {target}")
         if not tests:
             raise M.Blocked(f"no complete {target} CV test under {args.runs} for folds {folds} "
                             "(scripts/ctp_only_isles18_dag.py --testset cv), or --gan-bpm-only")
+        brans = {}
+        for b in args.bran:
+            name = f"bran_{b.resolve().name}"
+            if name in brans:
+                raise M.Blocked(f"{b} is given twice")
+            brans[name] = b.resolve()
         recipes = list(dict.fromkeys(["adv0"] + (args.recipe or [])))      # adv0 first: MRDPM's predictor
         run_dirs, configs = {}, {}
         for r in recipes:
@@ -420,11 +512,16 @@ def main(argv=None):
         + ("; gan_bpm only, no MRDPM map" if args.gan_bpm_only else "") + f"; out {out}")
     if extra:
         say(f"other runs ({args.run_checkpoint}): {', '.join(extra)}")
+    for k, t in sorted(tests.items()):
+        if t:
+            say(f"fold {k} MRDPM tests: " + ", ".join(f"{n} = {i['folder'].name}" for n, i in t.items()))
+    if brans:
+        say("pretrained BRANs alone (their held-out maps): " + ", ".join(f"{n} = {d}" for n, d in brans.items()))
 
     phys = lambda norm: np.asarray(scale.to_physical(np.clip(norm, -1, 1).astype(np.float64)))  # noqa: E731
     bases, rows, notes = [], [], []
     try:
-        for k, info in sorted(tests.items()):
+        for k, fold_tests in sorted(tests.items()):
             splits = {r: json.loads((run_dirs[r] / f"fold_{k}" / "split.json").read_text()) for r in recipes}
             held = sorted(map(str, splits["adv0"]["val_case_ids"]))
             if any(sorted(map(str, s["val_case_ids"])) != held for s in splits.values()):
@@ -447,35 +544,53 @@ def main(argv=None):
                                          batch_size=args.batch_size, device=args.device)
                 pr.fit(TrainingFold(k, sorted(map(str, split_r["train_case_ids"])), loader))
                 predictors[name] = pr
-            if info is None:
-                have, ids = None, held[:args.case_limit]
-                say(f"fold {k}: gan_bpm only, {len(ids)} held-out cases ...")
-            else:
+            # every saved map of this fold: MRDPM tests ({case: {slice: Out_ path}}) and pretrained
+            # BRANs ({case: {slice: Init_ path}}), all scored on the slices every one of them has
+            haves = {}
+            for name, info in fold_tests.items():
                 have = M.slices_in(info["results"])
                 if train & set(have):
-                    raise M.Blocked(f"fold {k}: MRDPM's test holds training cases {sorted(train & set(have))[:3]}")
+                    raise M.Blocked(f"fold {k}: {info['folder'].name} holds training cases {sorted(train & set(have))[:3]}")
                 if set(have) - set(held):
-                    raise M.Blocked(f"fold {k}: MRDPM's test holds cases outside the fold's held-out set")
-                untested = [c for c in held if c not in have]
-                if untested:
-                    notes.append(f"fold {k}: {len(untested)} held-out cases have no MRDPM map (e.g. {untested[:3]})")
-                ids = [c for c in held if c in have][:args.case_limit]
-                say(f"fold {k}: {info['folder'].name}, {len(ids)} held-out cases ...")
-            n_init = 0
+                    raise M.Blocked(f"fold {k}: {info['folder'].name} holds cases outside the fold's held-out set")
+                haves[name] = have
+            for name, d in brans.items():
+                have = read_bran(d, k, target, held, train, args.cv_root, args.allow_debug_bran)
+                if have is None:
+                    notes.append(f"fold {k}: {name} has no pretrained fold_{k}, so it isn't scored on this fold")
+                    continue
+                haves[name] = have
+            ids = [c for c in held if all(c in h for h in haves.values())]
+            if haves and len(ids) < len(held):
+                lacking = [n for n, h in haves.items() if any(c not in h for c in held)]
+                notes.append(f"fold {k}: {len(held) - len(ids)} held-out cases lack a map of "
+                             f"{', '.join(lacking)} and are left out (e.g. {[c for c in held if c not in ids][:3]})")
+            ids = ids[:args.case_limit]
+            say(f"fold {k}: {len(ids)} held-out cases; " + (", ".join(haves) if haves else "gan_bpm only") + " ...")
+            n_init = {}
             for cid in ids:
                 case = loader.load(cid)
                 maps = {}
-                if have is not None:
-                    keep, out_maps, init_maps = mrdpm_slices(info, case, have[cid])
+                if haves:
+                    common = set.intersection(*(set(h[cid]) for h in haves.values()))
+                    keep = np.array([s in common for s in case.slice_idx], dtype=bool)
                     if not keep.all():
-                        notes.append(f"fold {k} {cid}: {int((~keep).sum())} of {case.n_slices} slices without an MRDPM map")
+                        notes.append(f"fold {k} {cid}: {int((~keep).sum())} of {case.n_slices} slices without every map")
                     if not keep.any():
                         continue
+                    for name, have in haves.items():
+                        sub = {s: q for s, q in have[cid].items() if s in common}
+                        if name in brans:
+                            init_maps = np.stack([saved_slice(case, j, s, sub[s].parent, sub[s].name[len("Init_"):], "Init_")
+                                                  for j, s in enumerate(case.slice_idx) if keep[j]])
+                            maps[name] = phys(2 * init_maps - 1)
+                            continue
+                        _keep, out_maps, init_maps = mrdpm_slices(fold_tests[name], case, sub)
+                        maps[name] = phys(2 * out_maps - 1)
+                        if init_maps is not None:
+                            maps[f"{name}_init"] = phys(2 * init_maps - 1)
+                            n_init[name] = n_init.get(name, 0) + 1
                     case = case.select_slices(keep)
-                    maps["mrdpm"] = phys(2 * out_maps - 1)
-                    if init_maps is not None:
-                        maps["mrdpm_init"] = phys(2 * init_maps - 1)
-                        n_init += 1
                 for name, pr in predictors.items():
                     maps[name] = phys(predict_case(pr, case.without_labels()))
                 label = case.labels.astype(np.float64)
@@ -485,8 +600,9 @@ def main(argv=None):
                 base, scan = scan_rows(case, maps, scale, target, _region, k)
                 bases.append(base)
                 rows += scan
-            if have is not None and n_init and n_init != len(ids):
-                notes.append(f"fold {k}: Init_ for {n_init} of {len(ids)} cases")
+            for name, n in n_init.items():
+                if n != len(ids):
+                    notes.append(f"fold {k}: {name}: Init_ for {n} of {len(ids)} cases")
     except (M.Blocked, S.Blocked) as exc:
         print(f"BLOCKED: {exc}", file=sys.stderr)
         return 2
@@ -524,7 +640,10 @@ def main(argv=None):
         (out / "summary.txt").write_text("\n".join(say.lines) + "\n")
         return 2
 
-    maps = [m for m in SHOWN if m in set(df["map"])] + [m for m in extra if m in set(df["map"])]
+    present = set(df["map"])
+    arm_maps = [n for v in args.variant for n in (map_name(v), f"{map_name(v)}_init") if n in present]
+    maps = ([m for m in SHOWN if m in present] + arm_maps + [m for m in brans if m in present]
+            + [m for m in extra if m in present])
     say(f"\n## {target}: how well each map finds the label's core ({side} {cut:g} {scale.unit})")
     say("unit: one scan (a held-out CV case), mean over scans; folds pooled. matched = the map's k "
         "most extreme voxels, k = the label's core size; floor = k random voxels; place score = "
@@ -536,7 +655,12 @@ def main(argv=None):
               sweep_table(df, maps, target))
     say.table("By the size of the label's core", size_table(df, maps))
     say("\n### Paired, per scan")
-    for a, b in (("mrdpm", "gan_bpm"), ("mrdpm", "mrdpm_init"), ("mrdpm_init", "gan_bpm")):
+    pairs = [("mrdpm", "gan_bpm"), ("mrdpm", "mrdpm_init"), ("mrdpm_init", "gan_bpm")]
+    for v in args.variant:
+        a = map_name(v)
+        pairs += [(a, "mrdpm"), (a, "gan_bpm"), (a, f"{a}_init"), (f"{a}_init", "gan_bpm")]
+    pairs += [(b, "gan_bpm") for b in brans]
+    for a, b in pairs:
         if a in maps and b in maps:
             for column, what in (("matched", "matched Dice"), ("at_cut", "Dice at the cutoff")):
                 say(f"{a} − {b}, {what}: {paired(df, a, b, column, bootstrap_interval)}")
@@ -554,6 +678,22 @@ def main(argv=None):
         say(f"PICK: {chosen}" if chosen else
             f"PICK: none: no run beats {control} by the rule, so step 1 is negative and step 2 "
             "starts from the control")
+    # bran_ext_plan.md §5.3: the same pre-declared rule among the MRDPM arms and among the BRANs alone
+    for label, names in (("MRDPM arms", [map_name(v) for v in args.variant]), ("pretrained BRANs", list(brans))):
+        names = [n for n in names if n in maps]
+        if len(names) < 2:
+            continue
+        control, others = names[0], names[1:]
+        for b in others:
+            for column, what in (("matched", "matched Dice"), ("at_cut", "Dice at the cutoff"),
+                                 ("mae_brain", "brain MAE")):
+                say(f"{b} − {control}, {what}: {paired(df, b, control, column, bootstrap_interval)}")
+        table, chosen = pick(df, control, others, bootstrap_interval)
+        say.table(f"The pick among the {label} (bran_ext_plan.md §5.3, pre-declared): the highest Dice at the "
+                  f"cutoff whose paired difference from {control} has a 95 % CI above 0, with brain MAE at "
+                  "most 1.15 × the control's", table)
+        say(f"PICK among the {label}: {chosen}" if chosen else
+            f"PICK among the {label}: none: nothing beats {control} by the rule")
     say("\nReading: matched well above 'at the cutoff' = right place, wrong level. Matched near "
         "the floor (place score near 0) = wrong place.")
     (out / "summary.txt").write_text("\n".join(say.lines) + "\n")

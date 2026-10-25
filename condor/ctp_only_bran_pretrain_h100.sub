@@ -1,0 +1,48 @@
+# Pretrain BRAN, the paper's own initial predictor, alone (bran_ext_plan.md §2; paper §2.1 Eq. 1) on
+# the H100 NVL box: scripts/pretrain_bran.py with config/ctp_only_f13_<target>_<variant>_fold0.json,
+# on fold k's training cases. Then it maps fold k's held-out cases with it, for the core check
+# (scripts/ctp_only_core_check.py --bran). Results go to
+# /radraid2/colivares/mrdpm_ctp_only/bran/<name>/fold_<k>/ (<name> from the config's checkpoint),
+# where ctp_only_train_h100.sub's BRAN runs read them. The code is this checkout on 14958: git
+# pull before submitting. Data: the /home stage of ctp_only_stage_home.sub (rCBF: target = rcbf).
+#
+#   cd condor && mkdir -p log
+#   condor_submit ctp_only_bran_pretrain_h100.sub -append 'variant = bran_l1'                     # debug
+#   condor_submit ctp_only_bran_pretrain_h100.sub -append 'variant = bran_l1' -append 'mode = full'
+#   condor_submit ctp_only_bran_pretrain_h100.sub -append 'variant = bran_ext' -append 'mode = full' -append 'fold = 1'
+#
+#   tail -f log/ctp_only_bran_pretrain_h100.<cluster>.0.out
+#
+# The variants that own a BRAN: bran_l1 (L1, the paper's), bran_ext (L1 + Zeng's extreme loss),
+# bran_extlow (its low half only). bran_ext_diffext and bran_l1_diffext reuse bran_ext's and
+# bran_l1's. A finished pretraining is never overwritten: the job refuses to start.
+universe                = docker
+docker_image            = registry.cvib.ucla.edu/colivares:mrdpm-env-v1
+
+executable              = ctp_only_bran_pretrain_h100.sh
+arguments               = $(fold:0) $(mode:debug) $(Cluster).$(Process)
+environment             = "MRDPM_TARGET=$(target:rcbf) MRDPM_VARIANT=$(variant:none)"
+# No trailing slash: the checkout arrives in the workspace as MRDPM-with-RAP_fork/.
+transfer_input_files    = /raid/colivares/github_repos/MRDPM-with-RAP_fork
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT
+transfer_output_files   = job_summary.txt
+transfer_output_remaps  = "job_summary.txt = log/ctp_only_bran_pretrain_h100.$(cluster).$(process).summary"
+
+requirements            = (Machine == "$(gpu_host:REDLRADADM35838).ad.medctr.ucla.edu")
+# DataLoader workers hand batches over through /dev/shm.
++DevShmSize             = 8589934592
+
+request_gpus            = 1
+request_cpus            = 8
+request_memory          = 32G
+# The data and the run folder are on /home; the workspace holds the code.
+request_disk            = 2G
+
+output                  = log/ctp_only_bran_pretrain_h100.$(cluster).$(process).out
+error                   = log/ctp_only_bran_pretrain_h100.$(cluster).$(process).err
+log                     = log/ctp_only_bran_pretrain_h100.$(cluster).$(process).log
+stream_output           = True
+stream_error            = True
+
+queue

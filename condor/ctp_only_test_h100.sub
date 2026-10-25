@@ -9,6 +9,11 @@
 #   condor_submit ctp_only_test_h100.sub -append "run = $R" -append 'mode = full'    # the fold's held-out cases
 #   condor_submit ctp_only_test_h100.sub -append "run = $R" -append 'mode = full' -append 'testset = isles18'
 #
+# An arm's run (bran_ext_plan.md §5) is tested the same way; its name carries the arm, and the
+# test folder is test_ctp_only_f13_<target>_<variant>_fold<k>_<testset>_<time>. `run` may also be
+# the run's name without its _<date>_<time> (ctp_only_bran_ext.dag gives it so): the one folder of
+# that name with checkpoint `epoch` is tested.
+#
 #   tail -f log/ctp_only_test_h100.<cluster>.0.out
 universe                = docker
 docker_image            = registry.cvib.ucla.edu/colivares:mrdpm-env-v1
