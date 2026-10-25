@@ -463,4 +463,6 @@ The current setting is in brackets.
   on the CV held-out cases (#28, #29) [built, not run: needs the CV tests]; gan_bpm's 2g, the
   same on ISLES 2018 against DWI (in gan_bpm's uncommitted working tree) [not run]; Zeng's
   10–80 HU window as a reported region; several samples per slice instead of one (would
-  revise #22); Zeng's spatial and temporal smoothing [not started].
+  revise #22); Zeng's spatial and temporal smoothing [not started]. How much of gan_bpm's
+  gradient L_ext carries at the trained fold models (`scripts/ctp_only_ext_share.py`; gan_bpm
+  measured it at initialization only) [built, not run].
