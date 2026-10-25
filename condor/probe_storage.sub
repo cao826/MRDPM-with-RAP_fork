@@ -1,0 +1,32 @@
+# Where can a job keep data on each GPU box? Inside our docker image, on every box we might use:
+# which of /home/colivares, /raid, /radraid2, /data, /scratch, ... it sees and can write, how
+# big the Condor workspace is, and how fast /radraid2 copies. One job per box, no GPU, under a
+# minute each. probe_storage_host.sub asks the same on the boxes themselves, outside docker: a
+# folder seen there and not here is one Condor doesn't mount into containers on that box.
+#
+# Found 2026-10-25: a docker job on the L40S box REDLRADADM35839 doesn't see /home/colivares,
+# though the H100 box's jobs do (bran_ext_plan.md §2.5, decisions #35).
+#
+#   cd condor && mkdir -p log
+#   condor_submit probe_storage.sub && condor_submit probe_storage_host.sub
+#   grep -h VERDICT log/probe_storage*.out          # one line per box and mode; paste the .out files too
+universe                = docker
+docker_image            = registry.cvib.ucla.edu/colivares:mrdpm-env-v1
+
+executable              = probe_storage.sh
+arguments               = docker $(host)
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT
+
+requirements            = (Machine == "$(host).ad.medctr.ucla.edu")
+
+# No GPU: nothing here needs one, and asking for one makes it queue behind GPU jobs.
+request_cpus            = 1
+request_memory          = 2G
+request_disk            = 2G
+
+output                  = log/probe_storage.docker.$(host).$(cluster).out
+error                   = log/probe_storage.docker.$(host).$(cluster).err
+log                     = log/probe_storage.$(cluster).log
+
+queue host in (REDLRADADM35839, REDLRADADM35840, REDLRADADM14959, REDLRADADM35838)
