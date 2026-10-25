@@ -465,4 +465,8 @@ The current setting is in brackets.
   10–80 HU window as a reported region; several samples per slice instead of one (would
   revise #22); Zeng's spatial and temporal smoothing [not started]. How much of gan_bpm's
   gradient L_ext carries at the trained fold models (`scripts/ctp_only_ext_share.py`; gan_bpm
-  measured it at initialization only) [built, not run].
+  measured it at initialization only) [measured 2026-10-25, rCBF λ_adv = 0: L_ext supplies
+  6–20 % of the step at `best.pt` (epochs 7–16 of 40), 30 % at initialization; L_pix 80–94 %;
+  cos(pix, ext) 0.27 / 0.80 / 0.79 / −0.08 / 0.35 for folds 0–4. The core check on the CV
+  held-out cases, gan_bpm only: Dice at 0.3 is 0.42, matched 0.48, floor 0.06, volume 0.59 × the
+  label's: mostly a place problem. `/radraid2/colivares/mrdpm_ctp_only/{ext_share,cv_core_check}/`].
