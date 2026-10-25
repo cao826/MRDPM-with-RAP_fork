@@ -15,11 +15,11 @@
 # First, once each: the checks (bran_ext_plan.md §6: scripts/bran_ext_checks.py and
 # scripts/ctp_only_checks.py); the rCBF data on the pretraining box's /home (about 17 GB; the
 # H100 box has its copy already); then a debug pretraining there and a debug training of one arm:
-#   condor_submit ctp_only_stage_home.sub -append 'target = rcbf' -append 'gpu_host = REDLRADADM35839'
+#   condor_submit ctp_only_stage_home.sub -append 'target = rcbf' -append 'gpu_host = REDLRADADM35840'
 #   condor_submit ctp_only_bran_pretrain.sub -append 'variant = bran_l1'
 #   condor_submit ctp_only_train_h100.sub -append 'target = rcbf' -append 'variant = bran_l1'
-# To pretrain on another box instead (REDLRADADM35840, or the Quadro box REDLRADADM14959), stage
-# it there and change gpu_host in the three VARS PRE_* lines below (and in the debug commands).
+# 35840 is the L40S box with a /home/colivares (35839 has none; condor/probe_storage.sub). To use
+# another box with one, stage it there and change gpu_host in the three VARS PRE_* lines below.
 #
 #   cd /raid/colivares/github_repos/MRDPM-with-RAP_fork && git pull
 #   condor_q -run          # this account may hold 3 GPUs at once; going over gets jobs booted
@@ -42,11 +42,11 @@
 # after a finished PRE_*, delete that node's lines before a resubmission (or use the rescue file).
 
 JOB      PRE_L1          ctp_only_bran_pretrain.sub
-VARS     PRE_L1          variant="bran_l1" fold="0" mode="full" target="rcbf" gpu_host="REDLRADADM35839"
+VARS     PRE_L1          variant="bran_l1" fold="0" mode="full" target="rcbf" gpu_host="REDLRADADM35840"
 JOB      PRE_EXT         ctp_only_bran_pretrain.sub
-VARS     PRE_EXT         variant="bran_ext" fold="0" mode="full" target="rcbf" gpu_host="REDLRADADM35839"
+VARS     PRE_EXT         variant="bran_ext" fold="0" mode="full" target="rcbf" gpu_host="REDLRADADM35840"
 JOB      PRE_LOW         ctp_only_bran_pretrain.sub
-VARS     PRE_LOW         variant="bran_extlow" fold="0" mode="full" target="rcbf" gpu_host="REDLRADADM35839"
+VARS     PRE_LOW         variant="bran_extlow" fold="0" mode="full" target="rcbf" gpu_host="REDLRADADM35840"
 
 JOB      CHECK_PRE       ctp_only_core_check.sub
 VARS     CHECK_PRE       args="--gan-bpm-only --fold 0 --bran /radraid2/colivares/mrdpm_ctp_only/bran/rcbf_l1 --bran /radraid2/colivares/mrdpm_ctp_only/bran/rcbf_ext --bran /radraid2/colivares/mrdpm_ctp_only/bran/rcbf_extlow"

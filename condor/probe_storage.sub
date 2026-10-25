@@ -4,8 +4,10 @@
 # minute each. probe_storage_host.sub asks the same on the boxes themselves, outside docker: a
 # folder seen there and not here is one Condor doesn't mount into containers on that box.
 #
-# Found 2026-10-25: a docker job on the L40S box REDLRADADM35839 doesn't see /home/colivares,
-# though the H100 box's jobs do (bran_ext_plan.md §2.5, decisions #35).
+# Found 2026-10-25 (decisions #36): REDLRADADM35839 has no /home/colivares, in docker or out;
+# REDLRADADM35840 has one, writable; REDLRADADM14959 has none, but a writable local /raid/colivares
+# and a 3.2 TB workspace. Every box sees /radraid and /radraid2. The H100 box's docker jobs see
+# its /home/colivares (2026-10-19).
 #
 #   cd condor && mkdir -p log
 #   condor_submit probe_storage.sub && condor_submit probe_storage_host.sub

@@ -8,14 +8,15 @@
 #   cat log/ctp_only_stage_home.<cluster>.0.out      # paste this back
 #
 # Another box's /home (bran_ext_plan.md §2.5: BRAN's pretraining runs off the H100), e.g. an L40S:
-#   condor_submit ctp_only_stage_home.sub -append 'target = rcbf' -append 'gpu_host = REDLRADADM35839'
+#   condor_submit ctp_only_stage_home.sub -append 'target = rcbf' -append 'gpu_host = REDLRADADM35840'
 # On a box where Tmax was never staged, rcbf copies gan_bpm's code itself.
 #
 # What it copies (about 17 GB per target): the target's index, the mask cache, and the input and
 # label files of all 443 cases (scripts/ctp_only_stage_data.py --side all); split.json and
 # checkpoints/best.pt of gan_bpm's 5 folds for that target; for tmax only, gan_bpm's code. It
-# ends by writing STAGED_OK (tmax) or STAGED_OK_rcbf, which the training job requires. rcbf needs
-# tmax staged first and leaves Tmax's files alone, so it can run beside Tmax training jobs.
+# ends by writing STAGED_OK (tmax) or STAGED_OK_rcbf, which the training job requires. Where Tmax is
+# staged, rcbf reuses its copy of gan_bpm's code and leaves Tmax's files alone, so it can run beside
+# Tmax training jobs; elsewhere it copies the code itself.
 universe                = docker
 docker_image            = registry.cvib.ucla.edu/colivares:mrdpm-env-v1
 

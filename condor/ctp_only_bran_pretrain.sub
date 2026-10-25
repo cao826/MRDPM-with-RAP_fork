@@ -7,8 +7,9 @@
 # pull before submitting.
 #
 # WHERE (bran_ext_plan.md §2.5): off the H100 box, which the MRDPM trainings need. By default the
-# L40S box REDLRADADM35839 (46 GB cards); `gpu_host` picks another: REDLRADADM35840 (L40S) or
-# REDLRADADM14959 (Quadro RTX 8000, 48 GB). The data must be staged on that box's /home first,
+# L40S box REDLRADADM35840 (46 GB cards), the one GPU box besides the H100's with a
+# /home/colivares (condor/probe_storage.sub, 2026-10-25; 35839 has none). `gpu_host` picks another
+# box that has one. The data must be staged on that box's /home first,
 # once: condor_submit ctp_only_stage_home.sub -append 'target = rcbf' -append 'gpu_host = <box>'.
 #
 #   cd condor && mkdir -p log
@@ -36,7 +37,7 @@ when_to_transfer_output = ON_EXIT
 transfer_output_files   = job_summary.txt
 transfer_output_remaps  = "job_summary.txt = log/ctp_only_bran_pretrain.$(cluster).$(process).summary"
 
-requirements            = (Machine == "$(gpu_host:REDLRADADM35839).ad.medctr.ucla.edu")
+requirements            = (Machine == "$(gpu_host:REDLRADADM35840).ad.medctr.ucla.edu")
 # DataLoader workers hand batches over through /dev/shm.
 +DevShmSize             = 8589934592
 

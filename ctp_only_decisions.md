@@ -554,6 +554,20 @@ Settled before any ISLES 2018 map exists, so no result shaped it (#15).
   staging job is the first test.
 - **Status:** decided (Carlos); built 2026-10-25, not run.
 
+### 36. 2026-10-25 · The pretraining box is REDLRADADM35840, not 35839
+
+- **What happened:** the rCBF staging on REDLRADADM35839 (#35's default) stopped at once: no
+  `/home/colivares`. `condor/probe_storage.sub` and `probe_storage_host.sub` (one job per box, in
+  our docker image and on the box itself) found that 35839 has none in docker or out, so no mount
+  setting would help. 35840 (the other L40S box) has one, writable from a job. 14959 (Quadro) has
+  none, but a writable local `/raid/colivares` and a 3.2 TB workspace. Every box sees `/radraid*`.
+- **Decision:** the pretraining's default `gpu_host`, the DAG's `PRE_*` nodes and the staging
+  command name REDLRADADM35840. Whether docker jobs there see its `/home` is the staging job's
+  first check.
+- **Alternatives:** on 35839, copy the data into each job's workspace (about 17 GB of its 53 GB)
+  and keep the resume point on `/radraid2`; or 14959's local `/raid` or its workspace.
+- **Status:** adopted (built 2026-10-25); the docker probe of 35840 and its staging pending.
+
 ---
 
 ## Open
@@ -586,7 +600,7 @@ The current setting is in brackets.
   cos(pix, ext) 0.27 / 0.80 / 0.79 / −0.08 / 0.35 for folds 0–4. The core check on the CV
   held-out cases, gan_bpm only: Dice at 0.3 is 0.42, matched 0.48, floor 0.06, volume 0.59 × the
   label's: mostly a place problem. `/radraid2/colivares/mrdpm_ctp_only/{ext_share,cv_core_check}/`].
-- **The BRAN and extreme-loss arms** (#30–#35, branch `bran-ext`, `bran_ext_plan.md`): the box
+- **The BRAN and extreme-loss arms** (#30–#36, branch `bran-ext`, `bran_ext_plan.md`): the box
   checks (`scripts/bran_ext_checks.py`, `scripts/ctp_only_checks.py`), a debug pretraining and
   training of `bran_l1`, then `condor/ctp_only_bran_ext.dag` [built, not run]; the recipe
   choices of #30 and the masked input [Carlos to confirm]; the soft-Dice term [not built].
