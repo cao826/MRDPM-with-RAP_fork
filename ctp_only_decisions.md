@@ -369,6 +369,19 @@ Settled before any ISLES 2018 map exists, so no result shaped it (#15).
   `condor/ctp_only_test_h100.sh`. Running jobs keep the code they were submitted with:
   rCBF fold 2 (1822702.0) still has the old copy step.
 
+### 27. 2026-10-25 · Why the core is missed: diagnosed on the training data, not on ISLES 2018
+
+- **Decision (Carlos):** after the first ISLES 2018 scores (rCBF folds 0 and 1: DWI Dice
+  0.083 on `parenchyma`, against the reference's 0.238), looking at maps to find out why
+  MRDPM misses the core is done on the CV folds' held-out cases, plus any training slices
+  or cases the model struggles on. Not on ISLES 2018, for now.
+- **Why:** ISLES 2018 is the held-out test; changing the model because of what its maps show
+  would make the next ISLES number optimistic (#15).
+- **The figures (bookmarked, not built):** for each chosen slice, four images: the input as
+  read from file ("raw"), the input as the model gets it (after gan_bpm's `mctp` pipeline:
+  normalization, masking), MRDPM's generated rCBF and the ground-truth rCBF.
+- **Status:** decided (Carlos), not built.
+
 ---
 
 ## Open
@@ -386,3 +399,9 @@ The current setting is in brackets.
   valid voxels next to no-data holes against its error far from them [not done].
 - **The evaluation plan** covers rCBF too (#15): rCBF < 0.3 Dice and volume beside the MAE.
 - **An optional ablation:** BRAN from scratch on 3 channels.
+- **Map figures on the CV held-out cases and hard training slices** (#27): raw input, model
+  input, generated and true rCBF [bookmarked, not built].
+- **Why the core is missed** (2026-10-25 discussion): gan_bpm's 2g "right place or wrong
+  level" test (in gan_bpm's uncommitted working tree), Zeng's 10–80 HU window as a reported
+  region, several samples per slice instead of one (would revise #22), the data audit
+  (ISLES 2018 isn't motion-corrected in the build; phase timing) [not started].
