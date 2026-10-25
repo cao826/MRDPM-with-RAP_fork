@@ -434,6 +434,10 @@ Settled before any ISLES 2018 map exists, so no result shaped it (#15).
     sample changes. Training and the monitor are untouched.
     `scripts/ctp_only_checks.py` gained four checks for it.
   - `scripts/ctp_only_isles18_dag.py --testset cv` writes the DAG of CV tests.
+  - `--gan-bpm-only` (Carlos's question: gan_bpm can answer faster): gan_bpm's fold models
+    alone (λ_adv = 0, with `--recipe` LSGAN and WGAN-GP) on every held-out case, with no MRDPM
+    test. Minutes on a GPU against about 6 h of sampling per MRDPM fold, and it already says
+    whether MRDPM's starting map knows where the core is.
 - **Status:** decided (Carlos); built 2026-10-25, not yet run.
 
 ---

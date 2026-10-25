@@ -1,11 +1,13 @@
 # The "right place or wrong level" check (ctp_only_decisions.md #28) on 14958's GPU:
 # scripts/ctp_only_core_check.py, MRDPM's CV test maps against gan_bpm's predictor on each
 # fold's held-out cases. The GPU is for gan_bpm's predictions (about 60 slices/s); the rest is
-# reading files, so it takes minutes per fold. First, the CV tests on the H100:
-# python3 scripts/ctp_only_isles18_dag.py --testset cv --target rcbf.
+# reading files, so it takes minutes per fold. MRDPM's maps need the CV tests on the H100 first
+# (python3 scripts/ctp_only_isles18_dag.py --testset cv --target rcbf); gan_bpm's alone don't.
 #
 #   cd /raid/colivares/github_repos/MRDPM-with-RAP_fork && git pull
-#   cd condor && mkdir -p log && condor_submit ctp_only_core_check.sub
+#   cd condor && mkdir -p log
+#   condor_submit ctp_only_core_check.sub -append 'args = --gan-bpm-only --recipe lsgan --recipe wgan_gp'
+#   condor_submit ctp_only_core_check.sub                                          # with MRDPM's maps
 #   condor_submit ctp_only_core_check.sub -append 'args = --fold 0 --fold 1'       # some folds
 #   tail -f log/ctp_only_core_check.<cluster>.0.out
 #

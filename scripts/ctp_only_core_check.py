@@ -29,7 +29,13 @@ the CV data on 14958's /raid through gan_bpm's CaseLoader, and gan_bpm's fold mo
 its CheckpointPredictor, read-only. Writes per_scan.csv, checks.csv and summary.txt to --out.
 A GPU makes gan_bpm's predictions fast (condor/ctp_only_core_check.sub).
 
+--gan-bpm-only scores gan_bpm's fold models alone, on every held-out case of every fold, with
+no MRDPM test: minutes on a GPU, against about 6 h of sampling per fold for MRDPM. Since MRDPM
+starts from gan_bpm λ_adv = 0's map, it also says whether MRDPM's starting point knows where
+the core is. --recipe lsgan --recipe wgan_gp adds those fold models.
+
     python scripts/ctp_only_core_check.py [--target rcbf] [--fold 0 --fold 1] [--device cuda]
+    python scripts/ctp_only_core_check.py --gan-bpm-only --recipe lsgan --recipe wgan_gp
 """
 import argparse
 import json
@@ -52,7 +58,8 @@ TEST_NAME = re.compile(r"^test_ctp_only_f13_(tmax|rcbf)_fold([0-4])_cv_\d{6}_\d{
 SWEEP = {"rcbf": (0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
          "tmax": (2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0)}
 SIZE_BINS_ML = (0.0, 5.0, 15.0, 50.0, math.inf)
-SHOWN = ("mrdpm", "mrdpm_init", "gan_bpm")             # report rows, in this order
+SHOWN = ("mrdpm", "mrdpm_init", "gan_bpm", "gan_bpm_lsgan", "gan_bpm_wgan_gp")     # report rows, in order
+GAN_NAME = {"adv0": "gan_bpm", "lsgan": "gan_bpm_lsgan", "wgan_gp": "gan_bpm_wgan_gp"}
 LABEL_OFF_MAX = 0.9          # the label one slice off must score below this, on average
 SEED = 0
 
@@ -288,6 +295,10 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("test_folder", nargs="*", help="MRDPM CV test folders (default: every complete one under --runs)")
     p.add_argument("--target", choices=M.TARGETS, default="rcbf")
+    p.add_argument("--gan-bpm-only", action="store_true",
+                   help="gan_bpm's fold models alone, on every held-out case: no MRDPM test needed")
+    p.add_argument("--recipe", action="append", choices=M.RECIPES,
+                   help="gan_bpm recipes besides adv0 (MRDPM's predictor, always scored): lsgan, wgan_gp")
     p.add_argument("--fold", action="append", type=int, choices=M.FOLDS, help="default: every fold with a test")
     p.add_argument("--gan-bpm", type=Path, default=M.GAN_BPM, help="gan_bpm's checkout, read only")
     p.add_argument("--cv-root", type=Path, default=CV_ROOT)
@@ -317,71 +328,96 @@ def main(argv=None):
 
     try:
         folds = args.fold or list(M.FOLDS)
-        if args.test_folder:
+        if args.gan_bpm_only:
+            tests = {k: None for k in folds}
+        elif args.test_folder:
             tests = {i["fold"]: i for i in (read_cv_test(f, args.epoch) for f in args.test_folder)}
         else:
             tests = find_cv_tests(args.runs, target, folds, args.epoch)
-        if any(i["target"] != target for i in tests.values()):
+        if any(i is not None and i["target"] != target for i in tests.values()):
             raise M.Blocked(f"a test folder isn't {target}")
         if not tests:
             raise M.Blocked(f"no complete {target} CV test under {args.runs} for folds {folds} "
-                            "(scripts/ctp_only_isles18_dag.py --testset cv)")
-        run_dir = args.matrix / M.gan_run(target, "adv0")
-        config = H.read_config(run_dir)
-        recipe = H.recipe_of(json.loads((run_dir / "config.json").read_text()))
-        if (config.target, recipe) != (target, "adv0"):
-            raise M.Blocked(f"{run_dir.name}: config says {config.target}/{recipe}, not {target}/adv0")
-        loader = CaseLoader.from_config(config, data_root=args.cv_root)
+                            "(scripts/ctp_only_isles18_dag.py --testset cv), or --gan-bpm-only")
+        recipes = list(dict.fromkeys(["adv0"] + (args.recipe or [])))      # adv0 first: MRDPM's predictor
+        run_dirs, configs = {}, {}
+        for r in recipes:
+            run_dirs[r] = args.matrix / M.gan_run(target, r)
+            configs[r] = H.read_config(run_dirs[r])
+            found = H.recipe_of(json.loads((run_dirs[r] / "config.json").read_text()))
+            if (configs[r].target, found) != (target, r):
+                raise M.Blocked(f"{run_dirs[r].name}: config says {configs[r].target}/{found}, not {target}/{r}")
+        convention = lambda c: (c.target, c.label_transform, c.tmax_ceiling, c.mask_cache,  # noqa: E731
+                                c.min_label_fg_frac, tuple(c.qc_drop_slice_idx))
+        odd = [run_dirs[r].name for r in recipes if convention(configs[r]) != convention(configs["adv0"])]
+        if odd:
+            raise M.Blocked(f"{odd} load the data another way than {run_dirs['adv0'].name}")
+        loader = CaseLoader.from_config(configs["adv0"], data_root=args.cv_root)
         scale = loader.label_scale
     except (M.Blocked, S.Blocked) as exc:
         print(f"BLOCKED: {exc}", file=sys.stderr)
         return 2
     out.mkdir(parents=True, exist_ok=True)
-    say(f"core check {stamp}, {target} ({REGION[target][1]} {cut:g} {scale.unit}): MRDPM at "
+    say(f"core check {stamp}, {target} ({side} {cut:g} {scale.unit}): MRDPM at "
         f"{M.git_commit(M.REPO) or '<no git>'}, gan_bpm {args.gan_bpm} at {M.git_commit(args.gan_bpm) or '<no git>'}")
-    say(f"CV data {args.cv_root}; gan_bpm's predictor {run_dir.name} best.pt; folds {sorted(tests)}; out {out}")
+    say(f"CV data {args.cv_root}; gan_bpm's fold models (best.pt): "
+        f"{', '.join(f'{GAN_NAME[r]} = {run_dirs[r].name}' for r in recipes)}; folds {sorted(tests)}"
+        + ("; gan_bpm only, no MRDPM map" if args.gan_bpm_only else "") + f"; out {out}")
 
+    phys = lambda norm: np.asarray(scale.to_physical(np.clip(norm, -1, 1).astype(np.float64)))  # noqa: E731
     bases, rows, notes = [], [], []
     try:
         for k, info in sorted(tests.items()):
-            split = json.loads((run_dir / f"fold_{k}" / "split.json").read_text())
-            train, held = set(map(str, split["train_case_ids"])), sorted(map(str, split["val_case_ids"]))
-            have = M.slices_in(info["results"])
-            if train & set(have):
-                raise M.Blocked(f"fold {k}: MRDPM's test holds training cases {sorted(train & set(have))[:3]}")
-            if set(have) - set(held):
-                raise M.Blocked(f"fold {k}: MRDPM's test holds cases outside the fold's held-out set")
-            untested = [c for c in held if c not in have]
-            if untested:
-                notes.append(f"fold {k}: {len(untested)} held-out cases have no MRDPM map (e.g. {untested[:3]})")
-            p = CheckpointPredictor(run_dir, name=f"{run_dir.name}/fold{k}", checkpoint="best.pt",
-                                    batch_size=args.batch_size, device=args.device)
-            p.fit(TrainingFold(k, sorted(train), loader))
-            ids = [c for c in held if c in have][:args.case_limit]
-            say(f"fold {k}: {info['folder'].name}, {len(ids)} held-out cases ...")
+            splits = {r: json.loads((run_dirs[r] / f"fold_{k}" / "split.json").read_text()) for r in recipes}
+            held = sorted(map(str, splits["adv0"]["val_case_ids"]))
+            if any(sorted(map(str, s["val_case_ids"])) != held for s in splits.values()):
+                raise M.Blocked(f"fold {k}: the recipes hold out different cases")
+            train = set(map(str, splits["adv0"]["train_case_ids"]))
+            predictors = {}
+            for r in recipes:
+                pr = CheckpointPredictor(run_dirs[r], name=f"{run_dirs[r].name}/fold{k}", checkpoint="best.pt",
+                                         batch_size=args.batch_size, device=args.device)
+                pr.fit(TrainingFold(k, sorted(map(str, splits[r]["train_case_ids"])), loader))
+                predictors[GAN_NAME[r]] = pr
+            if info is None:
+                have, ids = None, held[:args.case_limit]
+                say(f"fold {k}: gan_bpm only, {len(ids)} held-out cases ...")
+            else:
+                have = M.slices_in(info["results"])
+                if train & set(have):
+                    raise M.Blocked(f"fold {k}: MRDPM's test holds training cases {sorted(train & set(have))[:3]}")
+                if set(have) - set(held):
+                    raise M.Blocked(f"fold {k}: MRDPM's test holds cases outside the fold's held-out set")
+                untested = [c for c in held if c not in have]
+                if untested:
+                    notes.append(f"fold {k}: {len(untested)} held-out cases have no MRDPM map (e.g. {untested[:3]})")
+                ids = [c for c in held if c in have][:args.case_limit]
+                say(f"fold {k}: {info['folder'].name}, {len(ids)} held-out cases ...")
             n_init = 0
             for cid in ids:
                 case = loader.load(cid)
-                keep, out_maps, init_maps = mrdpm_slices(info, case, have[cid])
-                if not keep.all():
-                    notes.append(f"fold {k} {cid}: {int((~keep).sum())} of {case.n_slices} slices without an MRDPM map")
-                if not keep.any():
-                    continue
-                case = case.select_slices(keep)
-                phys = lambda norm: np.asarray(scale.to_physical(np.clip(norm, -1, 1).astype(np.float64)))  # noqa: E731
-                maps = {"mrdpm": phys(2 * out_maps - 1),
-                        "gan_bpm": phys(predict_case(p, case.without_labels()))}
-                if init_maps is not None:
-                    maps["mrdpm_init"] = phys(2 * init_maps - 1)
-                    n_init += 1
+                maps = {}
+                if have is not None:
+                    keep, out_maps, init_maps = mrdpm_slices(info, case, have[cid])
+                    if not keep.all():
+                        notes.append(f"fold {k} {cid}: {int((~keep).sum())} of {case.n_slices} slices without an MRDPM map")
+                    if not keep.any():
+                        continue
+                    case = case.select_slices(keep)
+                    maps["mrdpm"] = phys(2 * out_maps - 1)
+                    if init_maps is not None:
+                        maps["mrdpm_init"] = phys(2 * init_maps - 1)
+                        n_init += 1
+                for name, pr in predictors.items():
+                    maps[name] = phys(predict_case(pr, case.without_labels()))
                 label = case.labels.astype(np.float64)
                 maps["label"] = np.asarray(scale.to_physical(label))
                 if case.n_slices > 1:
                     maps["label_rolled"] = np.roll(maps["label"], 1, axis=0)
-                base, r = scan_rows(case, maps, scale, target, _region, k)
+                base, scan = scan_rows(case, maps, scale, target, _region, k)
                 bases.append(base)
-                rows += r
-            if n_init and n_init != len(ids):
+                rows += scan
+            if have is not None and n_init and n_init != len(ids):
                 notes.append(f"fold {k}: Init_ for {n_init} of {len(ids)} cases")
     except (M.Blocked, S.Blocked) as exc:
         print(f"BLOCKED: {exc}", file=sys.stderr)
