@@ -77,7 +77,7 @@ def main(argv=None):
                 if tested:
                     state = f"tested already: {', '.join(sorted(tested))}"
                 else:
-                    state = f"QUEUED from {done[0].name}"
+                    state = f"ready to test (no complete ISLES test on /radraid2 yet): {done[0].name}"
                     nodes.append((f"{target.upper()}_F{k}", done[0]))
             print(f"{target:<6} {k:<5} {state}")
     if not nodes or args.dry_run:

@@ -14,6 +14,11 @@
 # ctp_only_decisions.md #17). The job reads them there and writes its run folder there too.
 # Every 10 minutes, and at the end, it moves finished checkpoints and copies everything else to
 # /radraid2/colivares/mrdpm_ctp_only/runs/<experiment>/, the only place 14958 can see.
+#
+# When Condor evicts the job and runs it again, the job keeps its JOBID, so it finds its earlier
+# attempts' run folders in $EXP_BASE. It resumes from their newest complete checkpoint instead of
+# epoch 0, and every run folder there is copied to /radraid2, not only the first
+# (ctp_only_decisions.md #26).
 set -u
 
 W="${_CONDOR_SCRATCH_DIR:-$PWD}"
@@ -74,6 +79,47 @@ say "stage: $(cat "$STAGED")"
 df -h /home | tail -1
 mkdir -p "$EXP_BASE" || fail "cannot create $EXP_BASE"
 
+# this attempt's run folder, once run.py has made it: names end in the start time, so it is the last
+current() { ls -d "$EXP_BASE"/*/ 2>/dev/null | tail -1; }
+
+# A run folder already here means Condor ran this job before. Resume from the newest checkpoint
+# of those attempts whose three files all load, on /home or already moved to $OUT, if it is newer
+# than RESUME. Without this a restarted job trained from epoch 0, unseen (decisions #26).
+if [ -n "$(current)" ]; then
+    say "restarted by Condor: earlier run folders in $EXP_BASE: $(ls "$EXP_BASE" | tr '\n' ' ')"
+    own=$(python - "$EXP_BASE" "$OUT" <<'PYEOF'
+import sys
+from pathlib import Path
+import torch
+base, out = Path(sys.argv[1]), Path(sys.argv[2])
+found = []
+for run in (r for r in base.iterdir() if r.is_dir()):
+    for ck in (run / "checkpoint", out / run.name / "checkpoint"):
+        for state in ck.glob("*.state"):
+            e = state.name[:-len(".state")]
+            if e.isdigit() and all((ck / f"{e}{s}").is_file() for s in ("_Network.pth", "_Network_ema.pth")):
+                found.append((int(e), str(ck / e)))
+for e, prefix in sorted(found, reverse=True):
+    try:                    # the eviction may have cut a save short
+        for s in (".state", "_Network.pth", "_Network_ema.pth"):
+            torch.load(prefix + s, map_location="cpu", weights_only=False)
+    except Exception as exc:
+        print(f"checkpoint {prefix} doesn't load ({exc}); trying an older one", file=sys.stderr)
+        continue
+    print(prefix)
+    break
+PYEOF
+)
+    resume_epoch=-1
+    [ -n "$RESUME" ] && resume_epoch=$(basename "$RESUME")
+    if [ -n "$own" ] && [ "$(basename "$own")" -gt "$resume_epoch" ]; then
+        say "resuming from this job's own checkpoint $own"
+        RESUME="$own"
+    else
+        say "no checkpoint of the earlier attempts is newer than resume ${RESUME:-<none>}: as submitted"
+    fi
+fi
+
 RESUME_LOCAL=
 if [ -n "$RESUME" ]; then
     mkdir -p "$H/resume/$JOBID"
@@ -109,27 +155,31 @@ json.dump(cfg, open(dst, "w"), indent=1)
 print(f"name {cfg['name']}, base_dir {base}, resume_state {cfg['path']['resume_state']}")
 PYEOF
 
-# Finished checkpoints move to $OUT; the newest set stays until a newer one exists, since it may
-# still be being written ("final" moves everything). Everything else is copied.
+# Every run folder in $EXP_BASE, earlier attempts' too. Finished checkpoints move to $OUT; the
+# newest set stays until a newer one exists, since it may still be being written ("final" moves
+# everything). Everything else is copied. RUN_OUT ends as this attempt's copy.
 sync_out() {
     local exp dst ck e newest
-    exp=$(ls -d "$EXP_BASE"/*/ 2>/dev/null | head -1)
-    [ -n "$exp" ] || return 0
-    exp="${exp%/}"
-    dst="$OUT/$(basename "$exp")"
-    ck="$exp/checkpoint"
-    mkdir -p "$dst/checkpoint"
-    newest=$(ls "$ck" 2>/dev/null | sed -n 's/^\([0-9]*\)\.state$/\1/p' | sort -n | tail -1)
-    for e in $(ls "$ck" 2>/dev/null | sed -n 's/^\([0-9]*\)\.state$/\1/p' | sort -n); do
-        if [ "${1:-}" = final ] || [ "$e" -lt "$newest" ]; then
-            mv "$ck/${e}_Network.pth" "$ck/${e}_Network_ema.pth" "$ck/${e}.state" "$dst/checkpoint/"
-        fi
+    for exp in "$EXP_BASE"/*/; do
+        [ -d "$exp" ] || continue
+        exp="${exp%/}"
+        dst="$OUT/$(basename "$exp")"
+        ck="$exp/checkpoint"
+        mkdir -p "$dst/checkpoint"
+        newest=$(ls "$ck" 2>/dev/null | sed -n 's/^\([0-9]*\)\.state$/\1/p' | sort -n | tail -1)
+        for e in $(ls "$ck" 2>/dev/null | sed -n 's/^\([0-9]*\)\.state$/\1/p' | sort -n); do
+            if [ "${1:-}" = final ] || [ "$e" -lt "$newest" ]; then
+                mv "$ck/${e}_Network.pth" "$ck/${e}_Network_ema.pth" "$ck/${e}.state" "$dst/checkpoint/"
+            fi
+        done
+        for item in "$exp"/*; do
+            [ "$(basename "$item")" = checkpoint ] || cp -ru "$item" "$dst/"
+        done
+        RUN_OUT="$dst"
     done
-    for item in "$exp"/*; do
-        [ "$(basename "$item")" = checkpoint ] || cp -ru "$item" "$dst/"
-    done
-    cp -u "$W/train.out" "$W/job_config.json" "$dst/" 2>/dev/null
-    RUN_OUT="$dst"
+    if [ -n "$RUN_OUT" ]; then
+        cp -u "$W/train.out" "$W/job_config.json" "$RUN_OUT/" 2>/dev/null
+    fi
 }
 
 echo "==================================================================="
@@ -144,7 +194,7 @@ while kill -0 "$PID" 2>/dev/null; do
         sleep 10
     done
     sync_out
-    last=$(tail -n 1 "$EXP_BASE"/*/health/train.csv 2>/dev/null)
+    last=$(tail -n 1 "$(current)health/train.csv" 2>/dev/null)
     echo "$(date '+%m-%d %H:%M')  ${last:-<no epoch finished yet>}"
 done
 wait "$PID"

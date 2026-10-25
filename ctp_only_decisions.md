@@ -340,6 +340,35 @@ Settled before any ISLES 2018 map exists, so no result shaped it (#15).
   `scripts/ctp_only_isles18_{maps,score,dag}.py`, `condor/ctp_only_stage_isles18.sub`,
   `condor/ctp_only_isles18_ganbpm_maps.sub`.
 
+### 26. 2026-10-25 · Runs that Condor restarted: recovered, and a restart now resumes
+
+- **What happened:** Condor evicted three training jobs and ran each again from the top, under
+  the same job id and with no `resume`: Tmax fold 3 (job 1821650.0) and rCBF fold 4
+  (1821651.0) on 10-21, and rCBF fold 3 (1822551.0) three times on 10-23/24. Each attempt
+  trained from epoch 0 into a new run folder beside the old one on the H100's `/home`, and the
+  job's copy step copied only the first folder by name, which was the dead attempt's. The last
+  attempts reached epoch 200 and exited 0, so DAGMan counted the folds done while `/radraid2`
+  showed them stopped at 180, 180 and 130. Found from the jobs' `.log` (2 or 4 starts) and
+  `.out` (two folders in the progress lines).
+- **Decision:**
+  - **These three fold models are the restarted runs:** `train_ctp_only_f13_tmax_fold3_261021_183315`,
+    `train_ctp_only_f13_rcbf_fold4_261021_183440`, `train_ctp_only_f13_rcbf_fold3_261024_032243`.
+    Each is a whole, uninterrupted run of the recipe from epoch 0, like folds 1 and 4 of Tmax.
+    `condor/ctp_only_recover_runs.sub` copies finished run folders from the box to `/radraid2`.
+    It only adds folders, and it renames a copy only after its files and sizes match.
+  - **A restarted training job resumes** from its earlier attempts' newest checkpoint whose
+    three files load (on `/home` or already on `/radraid2`) when it is newer than its
+    `resume`, and the job copies every run folder it holds, not only the first. The test job
+    copies its newest attempt's folder (a test has nothing to resume).
+- **Why:** the models trained correctly; only the copy failed. The rule that picks them is the
+  fixed one (checkpoint 200), with no score involved. Each restart from scratch cost about
+  20 GPU-hours.
+- **Alternatives:** resume the dead attempts from 180, 180 and 130 by hand (about 2, 2 and 7 h),
+  which throws away three finished models.
+- **Status:** adopted. `condor/ctp_only_recover_runs.{sub,sh}`, `condor/ctp_only_train_h100.sh`,
+  `condor/ctp_only_test_h100.sh`. Running jobs keep the code they were submitted with:
+  rCBF fold 2 (1822702.0) still has the old copy step.
+
 ---
 
 ## Open

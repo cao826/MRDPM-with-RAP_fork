@@ -120,11 +120,17 @@ json.dump(cfg, open(dst, "w"), indent=1)
 print(f"name {cfg['name']}, test {args['mctp_root']} / {args['split_json']}, resume_state {resume}")
 PYEOF
 
-# Everything but the Process_ trajectories goes to $OUT; the checkpoint copy and run.py's own
-# copy of the code stay behind.
+# this attempt's run folder: names end in the start time, so it is the last. A job Condor ran
+# again also holds its earlier attempts' partial folders, and a test has nothing to resume
+# (ctp_only_decisions.md #26).
+current() { ls -d "$EXP_BASE"/*/ 2>/dev/null | tail -1; }
+n_sampled() { local c; c=$(current); if [ -n "$c" ]; then ls "$c"results/test/*/Out_*.npy 2>/dev/null | wc -l; else echo 0; fi; }
+
+# This attempt's folder, all but the Process_ trajectories, goes to $OUT; the checkpoint copy
+# and run.py's own copy of the code stay behind.
 sync_out() {
     local exp dst
-    exp=$(ls -d "$EXP_BASE"/*/ 2>/dev/null | head -1)
+    exp=$(current)
     [ -n "$exp" ] || return 0
     exp="${exp%/}"
     dst="$OUT/$(basename "$exp")"
@@ -146,15 +152,13 @@ while kill -0 "$PID" 2>/dev/null; do
         kill -0 "$PID" 2>/dev/null || break
         sleep 10
     done
-    n=$(ls "$EXP_BASE"/*/results/test/*/Out_*.npy 2>/dev/null | wc -l)
-    echo "$(date '+%m-%d %H:%M')  $n slices sampled"
+    echo "$(date '+%m-%d %H:%M')  $(n_sampled) slices sampled"
 done
 wait "$PID"
 status=$?
 sync_out
 
 echo "==================================================================="
-n=$(ls "$EXP_BASE"/*/results/test/*/Out_*.npy 2>/dev/null | wc -l)
-say "test exited $status; $n slices sampled; results in ${RUN_OUT:-<none>} (Process_ files stay in $EXP_BASE)"
+say "test exited $status; $(n_sampled) slices sampled; results in ${RUN_OUT:-<none>} (Process_ files stay in $EXP_BASE)"
 tr '\r' '\n' < "$W/test.out" | grep -v "it/s]\|s/it]\|^ *$" | tail -n 15 | tee -a "$W/job_summary.txt"
 exit "$status"
