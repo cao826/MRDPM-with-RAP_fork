@@ -7,6 +7,10 @@
 #   cd condor && mkdir -p log && condor_submit ctp_only_stage_home.sub -append 'target = rcbf'
 #   cat log/ctp_only_stage_home.<cluster>.0.out      # paste this back
 #
+# Another box's /home (bran_ext_plan.md §2.5: BRAN's pretraining runs off the H100), e.g. an L40S:
+#   condor_submit ctp_only_stage_home.sub -append 'target = rcbf' -append 'gpu_host = REDLRADADM35839'
+# On a box where Tmax was never staged, rcbf copies gan_bpm's code itself.
+#
 # What it copies (about 17 GB per target): the target's index, the mask cache, and the input and
 # label files of all 443 cases (scripts/ctp_only_stage_data.py --side all); split.json and
 # checkpoints/best.pt of gan_bpm's 5 folds for that target; for tmax only, gan_bpm's code. It
@@ -21,7 +25,7 @@ transfer_input_files    = ../scripts/ctp_only_stage_data.py
 should_transfer_files   = YES
 when_to_transfer_output = ON_EXIT
 
-requirements            = (Machine == "REDLRADADM35838.ad.medctr.ucla.edu")
+requirements            = (Machine == "$(gpu_host:REDLRADADM35838).ad.medctr.ucla.edu")
 
 # Writes to /home, not the workspace, so it needs almost no workspace disk.
 request_cpus            = 2

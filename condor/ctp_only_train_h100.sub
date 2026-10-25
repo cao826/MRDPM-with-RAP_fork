@@ -18,7 +18,7 @@
 #
 # `variant` (bran_ext_plan.md §5) trains config/ctp_only_f13_<target>_<variant>_fold0.json instead,
 # into train_ctp_only_f13_<target>_<variant>_fold<k>_<time>. Its BRAN must be pretrained first
-# (ctp_only_bran_pretrain_h100.sub); a debug run takes the debug BRAN if there is one.
+# (ctp_only_bran_pretrain.sub); a debug run takes the debug BRAN if there is one.
 #
 #   tail -f log/ctp_only_train_h100.<cluster>.0.out
 universe                = docker

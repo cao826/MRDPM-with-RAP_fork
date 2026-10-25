@@ -3,7 +3,7 @@
     // BRAN with the extreme loss's low half only (the core's end); pretrained and scored alone first.
     // ctp_only_f13_rcbf_fold0.json with only these changed: the name, initial_predictor (BRAN, not
     // gan_bpm's generator) and diffusion_ext; scripts/bran_ext_checks.py refuses any other difference.
-    // Its BRAN is pretrained first (condor/ctp_only_bran_pretrain_h100.sub, variant = bran_extlow), into
+    // Its BRAN is pretrained first (condor/ctp_only_bran_pretrain.sub, variant = bran_extlow), into
     // the checkpoint below (fold 0; the jobs swap in fold_<k>). Paths are 14958's.
     "name": "ctp_only_f13_rcbf_bran_extlow_fold0",
     "gpu_ids": [0],

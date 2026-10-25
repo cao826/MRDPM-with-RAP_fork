@@ -3,7 +3,7 @@
     python scripts/pretrain_bran.py -c CONFIG --out DIR [--debug] [--device cuda] [--workers 8]
 
 CONFIG is the MRDPM config the predictor is for (config/ctp_only_f13_<target>_bran_*_fold0.json, or
-the job config condor/ctp_only_bran_pretrain_h100.sh writes from it). Everything comes from it, so
+the job config condor/ctp_only_bran_pretrain.sh writes from it). Everything comes from it, so
 the predictor and the MRDPM run that fine-tunes it read the same data:
 
 - training slices: `datasets.train.which_dataset` (the fold's training cases minus the monitor
@@ -20,7 +20,7 @@ Writes to --out:
   bran_G.pth         {"generator": state_dict, "meta": {...}}, what Network loads (strict)
   pretrain_log.csv   per epoch: the train and monitor losses, the monitor's MAE in label units,
                      the extreme loss split into its low and high halves, the core's bias and Dice
-                     on the monitor slices, LR, seconds
+                     on the monitor slices, LR, seconds, peak GPU memory
   last_state.pt      the resume point: a job Condor runs again continues from it
   heldout/           Init_/GT_/Mask_ .npy for every held-out slice, named as MRDPM's test names
                      them, for scripts/ctp_only_core_check.py --bran
@@ -233,6 +233,8 @@ def main(argv=None):
     for epoch in range(start, epochs):
         G.train()
         t0, sums, steps = time.time(), defaultdict(float), 0
+        if device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(device)
         for batch in loader:
             x, gt, mask, valid = inputs(batch, device, mask_cond)
             y = G(x)[0] * mask
@@ -251,13 +253,14 @@ def main(argv=None):
         mon = evaluate(G, monitor, device, mask_cond, scale, target)
         row = {"epoch": epoch + 1, "lr": lr, "steps": steps, **{f"train_{k}": v / steps for k, v in sums.items()},
                "train_ext_low_share": sums["ext_low"] / sums["ext_both"] if sums["ext_both"] else float("nan"),
-               **mon, "seconds": time.time() - t0}
+               **mon, "seconds": time.time() - t0,
+               "gpu_peak_gib": torch.cuda.max_memory_allocated(device) / 2**30 if device.type == "cuda" else 0.0}
         append_csv(log, row)
         save_atomic({"identity": identity, "epochs_done": epoch + 1, "generator": G.state_dict(),
                      "optimizer": opt.state_dict(), "scheduler": sched.state_dict()}, out / "last_state.pt")
         print(f"{datetime.now():%m-%d %H:%M}  epoch {epoch + 1}/{epochs}  loss {row['train_loss']:.5f}  "
               f"L1 {row['train_l1']:.5f}  monitor MAE {mon['mon_mae_label']:.4f}  core Dice {mon['mon_core_dice']:.3f}  "
-              f"lr {lr:.2e}  {row['seconds']:.0f} s", flush=True)
+              f"lr {lr:.2e}  {row['seconds']:.0f} s  GPU peak {row['gpu_peak_gib']:.1f} GiB", flush=True)
         run_epochs += 1
         if args.stop_after and run_epochs >= args.stop_after and epoch + 1 < epochs:
             print(f"stopping after {run_epochs} epochs (--stop-after)")

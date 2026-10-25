@@ -1,12 +1,14 @@
 #!/bin/bash
-# Invoked by ctp_only_stage_home.sub, on the H100 box. Copies from the /radraid2 stage to the
-# box's own disk, checks the copy, and writes the target's done-marker last.
+# Invoked by ctp_only_stage_home.sub, on the box its gpu_host names (the H100 box by default).
+# Copies from the /radraid2 stage to that box's own disk, checks the copy, and writes the
+# target's done-marker last.
 #
 # MRDPM_TARGET (the .sub's `target`) picks what is staged:
 #   tmax (default)  the Tmax files, gan_bpm's code, the Tmax generators in gan_run/; STAGED_OK
 #   rcbf            the rCBF files into the same root, the rCBF generators in gan_run_rcbf/;
-#                   STAGED_OK_rcbf. It reuses Tmax's copy of gan_bpm's code and mask cache, and
-#                   touches nothing of Tmax's, so Tmax jobs can run while it copies.
+#                   STAGED_OK_rcbf. Where Tmax is staged, it reuses Tmax's copy of gan_bpm's code
+#                   and touches nothing of Tmax's, so Tmax jobs can run while it copies. Where it
+#                   isn't (a box only BRAN's pretraining uses), it copies gan_bpm's code itself.
 # Don't rerun the tmax staging while a training job runs: it replaces gan_bpm's code under it.
 set -u
 
@@ -30,10 +32,9 @@ case "$TARGET" in
 esac
 
 echo "host: $(hostname)   date: $(date -Is)   target $TARGET"
+[ -d /home/colivares ] || fail "this job doesn't see /home/colivares on $(hostname)"
+[ -d "$SRC" ] || fail "this job doesn't see $SRC on $(hostname)"
 df -h /home | tail -1
-if [ "$TARGET" != tmax ]; then
-    [ -f "$DST/STAGED_OK" ] || fail "stage tmax first: $TARGET reuses its copy of gan_bpm's code"
-fi
 rm -f "$MARK"                   # until this run has checked its copy
 mkdir -p "$DST" || fail "cannot create $DST"
 echo "==================================================================="
@@ -42,10 +43,13 @@ echo "1. the dataset: every case of the 5-fold split, $TARGET only"
 python "$STAGER" "$SRC/mctp_dataset_f13_isles24_ucla_v2" "$DST/mctp_dataset_f13_isles24_ucla_v2" \
     --split "$GAN_RUN/fold_0/split.json" --side all --label-type "$TARGET" || fail "staging the dataset"
 
-if [ "$TARGET" = tmax ]; then
+CODE_NOTE=
+if [ "$TARGET" = tmax ] || [ ! -f "$DST/STAGED_OK" ]; then
+    # tmax always; rcbf only on a box where Tmax was never staged, so no Tmax job reads this copy
     echo "2. gan_bpm's code"
     rm -rf "$DST/gan_bpm"
     cp -r "$SRC/gan_bpm" "$DST/gan_bpm" || fail "copying gan_bpm"
+    [ "$TARGET" = tmax ] || CODE_NOTE="; gan_bpm's code copied by this rcbf staging (no Tmax stage here)"
 else
     echo "2. gan_bpm's code: Tmax's copy, left as it is ($(cat "$DST/STAGED_OK"))"
 fi
@@ -80,5 +84,5 @@ sys.exit(1 if missing else 0)
 EOF
 du -sh "$DST"/*
 
-{ echo "staged $TARGET $(date -Is) on $(hostname) from $SRC and $GAN_RUN"; } > "$MARK"
+{ echo "staged $TARGET $(date -Is) on $(hostname) from $SRC and $GAN_RUN$CODE_NOTE"; } > "$MARK"
 echo "wrote $MARK"

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Invoked by ctp_only_bran_pretrain_h100.sub as: ctp_only_bran_pretrain_h100.sh FOLD MODE JOBID
+# Invoked by ctp_only_bran_pretrain.sub as: ctp_only_bran_pretrain.sh FOLD MODE JOBID
 #   FOLD   0-4
 #   MODE   debug: 1 epoch on 8 training slices, 4 held-out maps, into bran/debug_<name>/.
 #          full: the config's recipe (50 epochs), into bran/<name>/.
@@ -7,9 +7,10 @@
 # and in the environment (the .sub's macros): MRDPM_TARGET (rcbf by default) and MRDPM_VARIANT,
 # the arm whose config is used: config/ctp_only_f13_<target>_<variant>_fold0.json.
 #
-# scripts/pretrain_bran.py (bran_ext_plan.md §2) on the data staged on the H100 box's /home
-# (ctp_only_stage_home.sub), with the fold's split.json from the staged gan_bpm run, as the
-# training jobs read them. It works in /home/colivares/mrdpm_ctp_only/bran_runs/<job>/, so a job
+# scripts/pretrain_bran.py (bran_ext_plan.md §2) on the data staged on this box's /home
+# (ctp_only_stage_home.sub with this box as gpu_host), with the fold's split.json from the staged
+# gan_bpm run, as the training jobs read them on the H100. It works in
+# /home/colivares/mrdpm_ctp_only/bran_runs/<job>/ on this box, so a job
 # Condor runs again resumes from its last epoch, and at the end copies everything but the resume
 # file to /radraid2/colivares/mrdpm_ctp_only/bran/<name>/fold_<k>/ under a temporary name, then
 # renames it. It refuses to start if that folder exists: a finished pretraining stays as it is.
@@ -53,8 +54,9 @@ say "host: $(hostname)   date: $(date -Is)   target $TARGET   variant $VARIANT  
 nvidia-smi -L || echo "(nvidia-smi -L failed)"
 [ -d "$CODE" ] || fail "no checkout at $CODE (transfer_input_files)"
 say "MRDPM code: $(git -C "$CODE" rev-parse --short HEAD 2>/dev/null || echo '<git unavailable>')"
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | sed 's/^/GPU: /' | tee -a "$W/job_summary.txt"
 [ -f "$CONFIG" ] || fail "no $CONFIG"
-[ -f "$STAGED" ] || fail "no $STAGED: run condor/ctp_only_stage_home.sub (target $TARGET) first"
+[ -f "$STAGED" ] || fail "no $STAGED on $(hostname): stage it there first (ctp_only_stage_home.sub, target $TARGET, gpu_host this box)"
 [ -f "$GAN_RUN/fold_$FOLD/split.json" ] || fail "fold_$FOLD of $TARGET isn't staged"
 mkdir -p "$LOCAL" || fail "cannot create $LOCAL"
 [ -n "$(ls "$LOCAL" 2>/dev/null)" ] && say "restarted by Condor: $LOCAL holds $(ls "$LOCAL" | tr '\n' ' ')"

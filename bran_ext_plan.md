@@ -98,7 +98,7 @@ and feeds the U-Net half-width features (32 / 64 / 128), duplicated to fit.
 ### 2.3 The steps
 
 1. **Pretrain BRAN** on fold k's training cases (`scripts/pretrain_bran.py`, job
-   `condor/ctp_only_bran_pretrain_h100.sub`). It reads everything from the arm's MRDPM config,
+   `condor/ctp_only_bran_pretrain.sub`). It reads everything from the arm's MRDPM config,
    so it sees exactly the data, split and monitor carve the MRDPM run will. At the end it maps
    fold k's held-out cases (Init_/GT_/Mask_), so BRAN alone can be scored before any diffusion.
    It writes `/radraid2/colivares/mrdpm_ctp_only/bran/<name>/fold_<k>/`: `bran_G.pth` (weights
@@ -118,6 +118,25 @@ epochs of fine-tuned weights. Upstream never noticed because it tests with `netG
 generator and the U-Net have no such buffers. `EMA.update_model_average` now averages
 floating-point buffers the two models share, the same way it averages weights (timm's
 `ModelEmaV2` does this), and copies the step counts. For today's runs it changes nothing.
+
+### 2.5 Where the pretraining runs: off the H100 box (decisions #35)
+
+The H100s are for the 20 h MRDPM trainings and the tests. BRAN's pretraining runs on another
+box: by default the L40S box **REDLRADADM35839** (8 × 46 GB), or REDLRADADM35840 (L40S), or
+REDLRADADM14959 (10 × Quadro RTX 8000, 48 GB), with `gpu_host`. It fits on any of them. The
+model is about 30 M weights, against the U-Net's 68.5 M, and my estimate is a few GB at batch 4.
+That's an estimate, not a measurement: the log's `gpu_peak_gib` column gives the real number
+from the first debug run. The L40S is the faster card.
+
+It works as on the H100: the data are copied once from `/radraid2/colivares/mrdpm_ctp_only/stage/`
+to that box's `/home/colivares/mrdpm_ctp_only/stage` (`ctp_only_stage_home.sub` with `gpu_host`,
+rCBF only, about 17 GB). The job works in that box's `/home`, and the finished BRAN goes to
+`/radraid2/colivares/mrdpm_ctp_only/bran/`, where the H100 trainings read it. On a box with no
+Tmax stage, the rCBF staging copies gan_bpm's code itself (the H100's still reuses Tmax's).
+
+Not verified yet: that docker jobs on these boxes see `/home/colivares` and `/radraid2`. The
+staging job checks both first and fails at once, naming the one it can't see. The account's
+3-GPU cap is cluster-wide, so this frees H100 cards but adds no GPUs.
 
 ---
 
@@ -223,7 +242,8 @@ running. The scoring still imports gan_bpm from its first checkout, which stays 
 
 ### 5.2 Order and cost: `condor/ctp_only_bran_ext.dag`
 
-1. `PRE_L1`, `PRE_EXT`, `PRE_LOW`: three pretrainings, about 1–3 h each (to measure).
+1. `PRE_L1`, `PRE_EXT`, `PRE_LOW`: three pretrainings on the L40S box (§2.5), a few hours
+   each (to measure).
 2. `CHECK_PRE` (14958, minutes): BRAN alone against gan_bpm's `best.pt` on fold 0's held-out
    cases (`--gan-bpm-only --bran …`).
 3. `TRAIN_*`: four MRDPM trainings, about 20 h each.
@@ -278,12 +298,13 @@ Both summaries must pass. `scripts/bran_ext_checks.py` (synthetic, CPU) covers:
 
 `ctp_only_checks.py` covers the code that changed under today's configs.
 
-Then a debug pass on the H100 before the DAG:
+Then the data on the pretraining box (once), and a debug pass before the DAG:
 
 ```bash
 cd condor && mkdir -p log
-condor_submit ctp_only_bran_pretrain_h100.sub -append 'variant = bran_l1'            # 1 epoch -> bran/debug_rcbf_l1/
-condor_submit ctp_only_train_h100.sub -append 'target = rcbf' -append 'variant = bran_l1'   # uses the debug BRAN
+condor_submit ctp_only_stage_home.sub -append 'target = rcbf' -append 'gpu_host = REDLRADADM35839'  # no GPU
+condor_submit ctp_only_bran_pretrain.sub -append 'variant = bran_l1'            # L40S, 1 epoch -> bran/debug_rcbf_l1/
+condor_submit ctp_only_train_h100.sub -append 'target = rcbf' -append 'variant = bran_l1'   # H100, uses the debug BRAN
 ```
 
 Delete `/radraid2/colivares/mrdpm_ctp_only/bran/debug_rcbf_l1` afterwards if you want to rerun the
@@ -305,15 +326,16 @@ debug.
 | `scripts/ctp_only_core_check.py` | `--variant`, `--bran`, `--allow-debug-bran`; arm-aware names; every map on the slices they all have; picks among arms and among BRANs |
 | `scripts/bran_ext_checks.py` | new: §6 |
 | `config/ctp_only_f13_rcbf_{bran_l1,bran_ext,bran_ext_diffext,bran_l1_diffext,bran_extlow}_fold0.json` | new: rCBF fold 0's config with only the name, `initial_predictor` and `diffusion_ext` changed |
-| `condor/ctp_only_bran_pretrain_h100.{sub,sh}` | new |
+| `condor/ctp_only_bran_pretrain.{sub,sh}` | new; runs off the H100 (`gpu_host`, default the L40S REDLRADADM35839) |
+| `condor/ctp_only_stage_home.{sub,sh}` | `gpu_host`; rCBF on a box with no Tmax stage copies gan_bpm's code itself |
 | `condor/ctp_only_train_h100.{sub,sh}` | `variant` macro; a BRAN arm's predictor is copied from `/radraid2` to `/home` |
 | `condor/ctp_only_test_h100.{sub,sh}` | arm-aware run names; `run` may be a name without its time (the DAG's) |
 | `condor/ctp_only_bran_ext.dag` | new: §5.2 |
 
 ## 8. Open
 
-- **Pretraining time and memory** at 512, batch 4: unmeasured. The debug job prints seconds per
-  epoch.
+- **Pretraining time and memory** at 512, batch 4, on the L40S: unmeasured. The debug job prints
+  seconds and peak GPU memory per epoch.
 - **The diffusion weight** (w = 1) has no reference value. If `bran_*_diffext` over-calls the core
   (volume ratio well above 1), try 0.5.
 - **gan_bpm's λ_ext sweep** may pick 200 or 500. Then an arm at w = 4 or 10 is a config copy.

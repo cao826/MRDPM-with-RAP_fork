@@ -521,7 +521,7 @@ def check_jobs(work, ckpt):
     check("test job: BRAN's pretraining checkpoint isn't needed (None), fold 1, the arm's test name",
           r.returncode == 0 and ip.get("checkpoint", "x") is None and ip.get("expect_fold") == 1
           and out.get("name") == "ctp_only_f13_rcbf_bran_l1_fold1_cv", r.stderr[-300:])
-    pre_py = heredoc("ctp_only_bran_pretrain_h100.sh")
+    pre_py = heredoc("ctp_only_bran_pretrain.sh")
     for mode, want in (("full", "rcbf_l1"), ("debug", "debug_rcbf_l1")):
         dst = work / f"job_pre_{mode}.json"
         r = py(pre_py, src, dst, stage, 1, mode, run)

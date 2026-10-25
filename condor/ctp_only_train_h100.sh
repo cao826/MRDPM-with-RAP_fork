@@ -161,7 +161,7 @@ if ip.get("type") == "bran":
     found = [t / f"fold_{fold}" / ck.name for t in tries if (t / f"fold_{fold}" / ck.name).is_file()]
     if not found:
         sys.exit(f"no pretrained BRAN at {tries[-1] / f'fold_{fold}' / ck.name}: run "
-                 f"ctp_only_bran_pretrain_h100.sub for it first")
+                 f"ctp_only_bran_pretrain.sub for it first")
     shutil.copy(found[0], f"{bran_in}/{ck.name}")
     print(f"BRAN {found[0]} -> {bran_in}/{ck.name}")
     ip.update(checkpoint=f"{bran_in}/{ck.name}", expect_fold=int(fold), allow_debug=(mode == "debug"))

@@ -535,6 +535,25 @@ Settled before any ISLES 2018 map exists, so no result shaped it (#15).
   move only the level.
 - **Status:** proposed by Claude and built 2026-10-25; not run.
 
+### 35. 2026-10-25 · BRAN's pretraining runs off the H100 box
+
+- **Decision (Carlos):** the pretrainings run on another box, staged the same way the H100 is:
+  the data are copied once to that box's `/home/colivares/mrdpm_ctp_only/stage`, and the job
+  works there and copies its BRAN to `/radraid2`. The default is the L40S box REDLRADADM35839;
+  REDLRADADM35840 (L40S) and REDLRADADM14959 (Quadro RTX 8000) are a `gpu_host` away. The
+  MRDPM trainings and the tests stay on the H100.
+- **Why:** BRAN's pretraining is small (about 30 M weights; my estimate is a few GB at batch 4,
+  not measured), and the H100 cards are what the 20 h trainings need: batch 4 doesn't fit on a
+  48 GB card (plan §14).
+- **Code:** `condor/ctp_only_bran_pretrain.{sub,sh}` (renamed from `ctp_only_bran_pretrain_h100`,
+  which #30 names; default `gpu_host` REDLRADADM35839), `condor/ctp_only_stage_home.{sub,sh}`
+  (`gpu_host`; rCBF on a box with no Tmax stage copies gan_bpm's code itself; it checks first
+  that the job sees `/home/colivares` and `/radraid2`), `scripts/pretrain_bran.py` (logs peak GPU
+  memory), the DAG's `PRE_*` nodes. Plan: `bran_ext_plan.md` §2.5.
+- **Not verified:** that docker jobs on those boxes see `/home/colivares` and `/radraid2`. The
+  staging job is the first test.
+- **Status:** decided (Carlos); built 2026-10-25, not run.
+
 ---
 
 ## Open
@@ -567,7 +586,7 @@ The current setting is in brackets.
   cos(pix, ext) 0.27 / 0.80 / 0.79 / −0.08 / 0.35 for folds 0–4. The core check on the CV
   held-out cases, gan_bpm only: Dice at 0.3 is 0.42, matched 0.48, floor 0.06, volume 0.59 × the
   label's: mostly a place problem. `/radraid2/colivares/mrdpm_ctp_only/{ext_share,cv_core_check}/`].
-- **The BRAN and extreme-loss arms** (#30–#34, branch `bran-ext`, `bran_ext_plan.md`): the box
+- **The BRAN and extreme-loss arms** (#30–#35, branch `bran-ext`, `bran_ext_plan.md`): the box
   checks (`scripts/bran_ext_checks.py`, `scripts/ctp_only_checks.py`), a debug pretraining and
   training of `bran_l1`, then `condor/ctp_only_bran_ext.dag` [built, not run]; the recipe
   choices of #30 and the masked input [Carlos to confirm]; the soft-Dice term [not built].
