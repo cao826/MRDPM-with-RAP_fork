@@ -460,7 +460,9 @@ The current setting is in brackets.
 - **Map figures on the CV held-out cases and hard training slices** (#27): raw input, model
   input, generated and true rCBF [bookmarked, not built].
 - **Why the core is missed** (2026-10-25 discussion): the "right place or wrong level" check
-  on the CV held-out cases (#28, #29) [built, not run: needs the CV tests]; gan_bpm's 2g, the
+  on the CV held-out cases (#28, #29) [built; gan_bpm's side run 2026-10-25, MRDPM's needs the
+  CV tests]. It also scores gan_bpm's λ_ext pilots (`--run-dir`, at `last.pt`) and applies their
+  pre-declared pick rule (gan_bpm `ext_gan_plan.md` §1.4, D-98); gan_bpm's 2g, the
   same on ISLES 2018 against DWI (in gan_bpm's uncommitted working tree) [not run]; Zeng's
   10–80 HU window as a reported region; several samples per slice instead of one (would
   revise #22); Zeng's spatial and temporal smoothing [not started]. How much of gan_bpm's

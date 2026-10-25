@@ -22,6 +22,7 @@ Medians over --batches batches per fold. Check, once per setting: the assembled 
 direct backward of the weighted sum (measure_grad_scope's own linearity check).
 
     python scripts/ctp_only_ext_share.py [--target rcbf] [--recipe adv0] [--fold 0] [--device cpu]
+    python scripts/ctp_only_ext_share.py --run-dir <a run_cv folder> --checkpoint last.pt --fold 0 --no-init
 """
 import argparse
 import dataclasses
@@ -103,6 +104,9 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--target", choices=M.TARGETS, default="rcbf")
     p.add_argument("--recipe", choices=M.RECIPES, default="adv0")
+    p.add_argument("--run-dir", type=Path, help="any gan_bpm run_cv folder instead of the matrix's "
+                   "<target>/<recipe> run (e.g. gan_bpm's λ_ext pilots)")
+    p.add_argument("--checkpoint", default="best.pt", help="each fold's checkpoint (best.pt; last.pt)")
     p.add_argument("--fold", action="append", type=int, choices=M.FOLDS, help="default: all five")
     p.add_argument("--batches", type=int, default=8, help="batches per fold (measure_grad_scope's 8)")
     p.add_argument("--no-init", action="store_true", help="skip the reading at initialization")
@@ -114,7 +118,8 @@ def main(argv=None):
     p.add_argument("--out", type=Path, help=f"default: {OUT}/<date_time>_<target>_<recipe>/")
     args = p.parse_args(argv)
     stamp = datetime.now().strftime("%y%m%d_%H%M%S")
-    out = args.out or OUT / f"{stamp}_{args.target}_{args.recipe}"
+    tag = args.run_dir.name if args.run_dir else f"{args.target}_{args.recipe}"
+    out = args.out or OUT / f"{stamp}_{tag}"
     try:
         H, _S = M.load_gan_bpm(args.gan_bpm)
     except M.Blocked as exc:
@@ -127,10 +132,10 @@ def main(argv=None):
     scope = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(scope)                                       # gan_bpm's flat_grad, unchanged
 
-    run_dir = args.matrix / M.gan_run(args.target, args.recipe)
+    run_dir = args.run_dir.resolve() if args.run_dir else args.matrix / M.gan_run(args.target, args.recipe)
     base = training.TrainingConfig.from_json(run_dir / "config.json")
     found = H.recipe_of(json.loads((run_dir / "config.json").read_text()))
-    if (base.target, found) != (args.target, args.recipe):
+    if args.run_dir is None and (base.target, found) != (args.target, args.recipe):
         print(f"BLOCKED: {run_dir.name} is {base.target}/{found}, not {args.target}/{args.recipe}", file=sys.stderr)
         return 2
     device = torch.device("cuda" if args.device == "cuda" or (args.device == "auto" and torch.cuda.is_available())
@@ -140,15 +145,15 @@ def main(argv=None):
           f"batch {base.batch_size}, split {base.split_file or '<from seed>'}; data {args.cv_root}; device {device}")
 
     rows = []
-    settings = [(k, "best.pt") for k in (args.fold or M.FOLDS)] + ([] if args.no_init else [(0, "init")])
+    settings = [(k, "trained") for k in (args.fold or M.FOLDS)] + ([] if args.no_init else [(0, "init")])
     for k, at in settings:
         cfg = dataclasses.replace(base, data_root=str(args.cv_root), fold=k,
                                   num_workers=args.num_workers).validate()
         experiment = training.build_experiment(cfg, device)
         label = "initialization"
-        if at == "best.pt":
-            epoch = training.load_checkpoint(run_dir / f"fold_{k}" / "checkpoints" / "best.pt", experiment)
-            label = f"best.pt (epoch {epoch})"
+        if at == "trained":
+            epoch = training.load_checkpoint(run_dir / f"fold_{k}" / "checkpoints" / args.checkpoint, experiment)
+            label = f"{args.checkpoint} (epoch {epoch})"
         experiment.model.train()             # as measure_grad_scope: the mode G trains in
         rows += measure_setting(experiment, scope.flat_grad, args.batches, label, k)
 

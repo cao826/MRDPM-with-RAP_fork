@@ -34,8 +34,16 @@ no MRDPM test: minutes on a GPU, against about 6 h of sampling per fold for MRDP
 starts from gan_bpm λ_adv = 0's map, it also says whether MRDPM's starting point knows where
 the core is. --recipe lsgan --recipe wgan_gp adds those fold models.
 
+--run-dir scores other gan_bpm runs too, at --run-checkpoint (last.pt): gan_bpm's λ_ext
+pilots (its ext_gan_plan.md step 1). With two or more, the first is the control, every other
+is compared with it per scan, and the pre-declared pick rule of that plan's §1.4 is applied.
+
     python scripts/ctp_only_core_check.py [--target rcbf] [--fold 0 --fold 1] [--device cuda]
     python scripts/ctp_only_core_check.py --gan-bpm-only --recipe lsgan --recipe wgan_gp
+    python scripts/ctp_only_core_check.py --gan-bpm-only --fold 0 \\
+        --run-dir /radraid2/colivares/matrix/gan_bpm_rcbf_f13uclav2_adv0_ext50_e40_f0 \\
+        --run-dir /radraid2/colivares/matrix/gan_bpm_rcbf_f13uclav2_adv0_ext200_e40_f0 \\
+        --run-dir /radraid2/colivares/matrix/gan_bpm_rcbf_f13uclav2_adv0_ext500_e40_f0
 """
 import argparse
 import json
@@ -175,9 +183,12 @@ def scan_rows(case, maps, scale, target, region, fold):
     truth = core[brain]
     seed = [SEED, zlib.crc32(case.case_id.encode())]
     rows = []
+    in_brain = label[brain]
+    label_sd = float(in_brain.std())
     for name, phys in maps.items():
         rng = np.random.default_rng(seed + [zlib.crc32(name.encode())])
-        idx = extreme_k(np.asarray(phys, dtype=np.float64)[brain], k, side, rng)
+        values = np.asarray(phys, dtype=np.float64)[brain]
+        idx = extreme_k(values, k, side, rng)
         matched = float(truth[idx].sum()) / k
         row = {**base, "map": name, "matched": matched,
                "place": (matched - floor) / (1.0 - floor) if floor < 1 else math.nan}
@@ -185,6 +196,10 @@ def scan_rows(case, maps, scale, target, region, fold):
             row[f"dice_{t:g}"] = dice(region(phys, brain, side, t), core)
         row["at_cut"] = row[f"dice_{cut:g}"]
         row["vol_ratio"] = float(region(phys, brain, side, cut).sum()) / k
+        # The level-1 and level-2 view on the same voxels: brain MAE (physical units) and how
+        # much the map varies against the label (1 = as much; gan_bpm's squeeze is about 0.8).
+        row["mae_brain"] = float(np.abs(values - in_brain).mean())
+        row["spread_ratio"] = float(values.std()) / label_sd if label_sd > 0 else math.nan
         rows.append(row)
     rng = np.random.default_rng(seed + [zlib.crc32(b"random")])          # the floor, simulated
     idx = extreme_k(rng.random(n), k, side, rng)
@@ -234,8 +249,33 @@ def summary_table(df, maps, target):
                       "cutoff median": fmt(d["at_cut"].median()), "matched mean": fmt(d["matched"].mean()),
                       "matched median": fmt(d["matched"].median()), "floor": fmt(d["floor"].mean()),
                       "place score": fmt(d["place"].mean()),
-                      "volume / label's (median)": fmt(d["vol_ratio"].median(), 2)}
+                      "volume / label's (median)": fmt(d["vol_ratio"].median(), 2),
+                      "MAE brain": fmt(d["mae_brain"].mean()), "spread": fmt(d["spread_ratio"].mean())}
     return pd.DataFrame.from_dict(rows, orient="index")
+
+
+def pick(df, control, others, bootstrap_interval, mae_max=1.15):
+    """gan_bpm's ext_gan_plan.md §1.4, pre-declared: among `others`, the map with the highest
+    mean Dice at the cutoff whose paired per-scan difference from `control` has a 95 %
+    bootstrap CI above 0 and whose mean brain MAE is at most `mae_max` × the control's.
+    Returns (table, the pick or None)."""
+    c = df[df["map"] == control].set_index(["fold", "case_id"])
+    rows, qualified = {}, []
+    for name in others:
+        o = df[df["map"] == name].set_index(["fold", "case_id"])
+        both = o.index.intersection(c.index)
+        if both.empty:
+            continue
+        diff = (o.loc[both, "at_cut"] - c.loc[both, "at_cut"]).to_numpy(dtype=np.float64)
+        lo, hi = bootstrap_interval(diff, np.mean, n=2000, ci=0.95, rng=np.random.default_rng(SEED))
+        mae = float(o.loc[both, "mae_brain"].mean()) / float(c.loc[both, "mae_brain"].mean())
+        ok = lo > 0 and mae <= mae_max
+        rows[name] = {"scans": diff.size, "Dice at cutoff": fmt(float(o.loc[both, "at_cut"].mean())),
+                      f"− {control}": f"{fmt(diff.mean())} [{fmt(lo)}, {fmt(hi)}]",
+                      "MAE / control's": fmt(mae, 3), "qualifies": "yes" if ok else "no"}
+        if ok:
+            qualified.append((float(o.loc[both, "at_cut"].mean()), name))
+    return pd.DataFrame.from_dict(rows, orient="index"), (max(qualified)[1] if qualified else None)
 
 
 def per_fold_table(df, maps, column):
@@ -299,6 +339,10 @@ def main(argv=None):
                    help="gan_bpm's fold models alone, on every held-out case: no MRDPM test needed")
     p.add_argument("--recipe", action="append", choices=M.RECIPES,
                    help="gan_bpm recipes besides adv0 (MRDPM's predictor, always scored): lsgan, wgan_gp")
+    p.add_argument("--run-dir", action="append", type=Path, default=[],
+                   help="another gan_bpm run_cv folder to score (e.g. the λ_ext pilots), named by its "
+                        "folder; with two or more, the first is the control of the pick (§1.4)")
+    p.add_argument("--run-checkpoint", default="last.pt", help="the --run-dir runs' checkpoint (last.pt)")
     p.add_argument("--fold", action="append", type=int, choices=M.FOLDS, help="default: every fold with a test")
     p.add_argument("--gan-bpm", type=Path, default=M.GAN_BPM, help="gan_bpm's checkout, read only")
     p.add_argument("--cv-root", type=Path, default=CV_ROOT)
@@ -350,6 +394,17 @@ def main(argv=None):
         convention = lambda c: (c.target, c.label_transform, c.tmax_ceiling, c.mask_cache,  # noqa: E731
                                 c.min_label_fg_frac, tuple(c.qc_drop_slice_idx))
         odd = [run_dirs[r].name for r in recipes if convention(configs[r]) != convention(configs["adv0"])]
+        extra = {}                                       # --run-dir: name -> (folder, config)
+        for rd in args.run_dir:
+            rd = rd.resolve()
+            if rd.name in extra or rd.name in GAN_NAME.values():
+                raise M.Blocked(f"{rd.name} is given twice")
+            cfg = H.read_config(rd)
+            if cfg.target != target:
+                raise M.Blocked(f"{rd.name} is a {cfg.target} run, not {target}")
+            if convention(cfg) != convention(configs["adv0"]):
+                odd.append(rd.name)
+            extra[rd.name] = (rd, cfg)
         if odd:
             raise M.Blocked(f"{odd} load the data another way than {run_dirs['adv0'].name}")
         loader = CaseLoader.from_config(configs["adv0"], data_root=args.cv_root)
@@ -363,6 +418,8 @@ def main(argv=None):
     say(f"CV data {args.cv_root}; gan_bpm's fold models (best.pt): "
         f"{', '.join(f'{GAN_NAME[r]} = {run_dirs[r].name}' for r in recipes)}; folds {sorted(tests)}"
         + ("; gan_bpm only, no MRDPM map" if args.gan_bpm_only else "") + f"; out {out}")
+    if extra:
+        say(f"other runs ({args.run_checkpoint}): {', '.join(extra)}")
 
     phys = lambda norm: np.asarray(scale.to_physical(np.clip(norm, -1, 1).astype(np.float64)))  # noqa: E731
     bases, rows, notes = [], [], []
@@ -379,6 +436,17 @@ def main(argv=None):
                                          batch_size=args.batch_size, device=args.device)
                 pr.fit(TrainingFold(k, sorted(map(str, splits[r]["train_case_ids"])), loader))
                 predictors[GAN_NAME[r]] = pr
+            for name, (rd, _cfg) in extra.items():
+                if not (rd / f"fold_{k}" / "checkpoints" / args.run_checkpoint).is_file():
+                    notes.append(f"fold {k}: {name} has no {args.run_checkpoint}, so it isn't scored on this fold")
+                    continue
+                split_r = json.loads((rd / f"fold_{k}" / "split.json").read_text())
+                if sorted(map(str, split_r["val_case_ids"])) != held:
+                    raise M.Blocked(f"fold {k}: {name} holds out other cases than {run_dirs['adv0'].name}")
+                pr = CheckpointPredictor(rd, name=f"{name}/fold{k}", checkpoint=args.run_checkpoint,
+                                         batch_size=args.batch_size, device=args.device)
+                pr.fit(TrainingFold(k, sorted(map(str, split_r["train_case_ids"])), loader))
+                predictors[name] = pr
             if info is None:
                 have, ids = None, held[:args.case_limit]
                 say(f"fold {k}: gan_bpm only, {len(ids)} held-out cases ...")
@@ -456,7 +524,7 @@ def main(argv=None):
         (out / "summary.txt").write_text("\n".join(say.lines) + "\n")
         return 2
 
-    maps = [m for m in SHOWN if m in set(df["map"])]
+    maps = [m for m in SHOWN if m in set(df["map"])] + [m for m in extra if m in set(df["map"])]
     say(f"\n## {target}: how well each map finds the label's core ({side} {cut:g} {scale.unit})")
     say("unit: one scan (a held-out CV case), mean over scans; folds pooled. matched = the map's k "
         "most extreme voxels, k = the label's core size; floor = k random voxels; place score = "
@@ -472,6 +540,20 @@ def main(argv=None):
         if a in maps and b in maps:
             for column, what in (("matched", "matched Dice"), ("at_cut", "Dice at the cutoff")):
                 say(f"{a} − {b}, {what}: {paired(df, a, b, column, bootstrap_interval)}")
+    scored = [m for m in extra if m in maps]
+    if len(scored) >= 2:
+        control, others = scored[0], scored[1:]
+        for b in others:
+            for column, what in (("matched", "matched Dice"), ("at_cut", "Dice at the cutoff"),
+                                 ("mae_brain", "brain MAE")):
+                say(f"{b} − {control}, {what}: {paired(df, b, control, column, bootstrap_interval)}")
+        table, chosen = pick(df, control, others, bootstrap_interval)
+        say.table(f"The pick (gan_bpm ext_gan_plan.md §1.4, pre-declared): the highest Dice at the "
+                  f"cutoff whose paired difference from {control} has a 95 % CI above 0, with brain "
+                  "MAE at most 1.15 × the control's", table)
+        say(f"PICK: {chosen}" if chosen else
+            f"PICK: none: no run beats {control} by the rule, so step 1 is negative and step 2 "
+            "starts from the control")
     say("\nReading: matched well above 'at the cutoff' = right place, wrong level. Matched near "
         "the floor (place score near 0) = wrong place.")
     (out / "summary.txt").write_text("\n".join(say.lines) + "\n")
