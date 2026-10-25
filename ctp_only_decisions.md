@@ -382,6 +382,35 @@ Settled before any ISLES 2018 map exists, so no result shaped it (#15).
   normalization, masking), MRDPM's generated rCBF and the ground-truth rCBF.
 - **Status:** decided (Carlos), not built.
 
+### 28. 2026-10-25 · The "right place or wrong level" check, on the training data; the data-audit leads closed
+
+- **Decision (Carlos):** run the check that tells apart the two reasons the core can be
+  missed, on the training data (#27), against the label's own rCBF < 0.3 core (no DWI there):
+  - **Matched cores:** per scan, a map's k lowest-rCBF voxels in the brain (`support`), with
+    k the size of the label's rCBF < 0.3 core there, and their Dice with the label's core.
+    Scans whose label has no core are left out and counted.
+  - **Cutoff sweep:** the Dice of map < t with the label's core (the label stays at 0.3),
+    for t = 0.2, 0.3, … 1.0.
+  - **Floor:** k voxels drawn at random in the same brain: the Dice of a map that carries
+    no information.
+  - Every map on the same scans: MRDPM's and its own predictor's (gan_bpm λ_adv = 0, same
+    fold).
+- **How to read it:** a matched Dice well above the Dice at 0.3 means right place, wrong
+  level: the scale is off, and a cutoff or a rescaling chosen on the CV data could recover it
+  without retraining. A matched Dice near the random floor means wrong place: the model
+  doesn't locate the core, and no cutoff helps.
+- **Why the label's core and not DWI:** on the training data the question is whether the
+  model reproduces its label, and it leaves ISLES 2018 untouched. gan_bpm's
+  `zeng_isles18_eval` 2g asks the same on ISLES 2018 against DWI.
+- **The data-audit leads, closed (Carlos):** ISLES 2018 comes motion-corrected as
+  distributed (the build has no step for it because none is needed). The phases stay f13.
+  ISLES 2018 scans whose automatic timing failed use the raters' manual AIF. Still
+  unexamined: Zeng's spatial and temporal smoothing (kernels 7 and 3) before the phases are
+  taken.
+- **Status:** decided (Carlos), not built. It needs MRDPM's maps on those cases; the CV
+  tests (`ctp_only_test_h100.sub`, `testset = cv`, about 6 h per fold) make them, and the CV
+  evaluation (eval plan §5) needs them anyway.
+
 ---
 
 ## Open
@@ -401,7 +430,12 @@ The current setting is in brackets.
 - **An optional ablation:** BRAN from scratch on 3 channels.
 - **Map figures on the CV held-out cases and hard training slices** (#27): raw input, model
   input, generated and true rCBF [bookmarked, not built].
-- **Why the core is missed** (2026-10-25 discussion): gan_bpm's 2g "right place or wrong
-  level" test (in gan_bpm's uncommitted working tree), Zeng's 10–80 HU window as a reported
-  region, several samples per slice instead of one (would revise #22), the data audit
-  (ISLES 2018 isn't motion-corrected in the build; phase timing) [not started].
+- **Why the core is missed** (2026-10-25 discussion): the "right place or wrong level" check
+  on the training data (#28) [decided, not built]; gan_bpm's 2g, the same on ISLES 2018
+  against DWI (in gan_bpm's uncommitted working tree) [not run]; Zeng's 10–80 HU window as a
+  reported region; several samples per slice instead of one (would revise #22); Zeng's
+  spatial and temporal smoothing [not started].
+- **Which cases the diagnosis uses** (#27, #28): the CV folds' held-out cases are held out
+  too (#15), so diagnosing on them would make the CV a development set, with ISLES 2018 the
+  only untouched test. The alternatives are the training cases themselves (in-sample) and
+  the monitor patients [to settle].
