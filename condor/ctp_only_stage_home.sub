@@ -7,9 +7,12 @@
 #   cd condor && mkdir -p log && condor_submit ctp_only_stage_home.sub -append 'target = rcbf'
 #   cat log/ctp_only_stage_home.<cluster>.0.out      # paste this back
 #
-# Another box's /home (bran_ext_plan.md §2.5: BRAN's pretraining runs off the H100), e.g. an L40S:
-#   condor_submit ctp_only_stage_home.sub -append 'target = rcbf' -append 'gpu_host = REDLRADADM35840'
-# On a box where Tmax was never staged, rcbf copies gan_bpm's code itself.
+# The boxes BRAN's pretraining uses (bran_ext_plan.md §2.5, decisions #37), into their own disks:
+#   condor_submit ctp_only_stage_home.sub -append 'target = rcbf' -append 'gpu_host = REDLRADADM35840'  # L40S: /home/colivares
+#   condor_submit ctp_only_stage_home.sub -append 'target = rcbf' -append 'gpu_host = REDLRADADM14959'  # Quadro: local /raid/colivares
+# The job picks the folder from the box (<root>/stage; <root> is /raid/colivares/mrdpm_ctp_only on
+# 14959, /home/colivares/mrdpm_ctp_only elsewhere). Where Tmax was never staged, rcbf copies
+# gan_bpm's code itself.
 #
 # What it copies (about 17 GB per target): the target's index, the mask cache, and the input and
 # label files of all 443 cases (scripts/ctp_only_stage_data.py --side all); split.json and

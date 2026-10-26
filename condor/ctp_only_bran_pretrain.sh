@@ -7,10 +7,11 @@
 # and in the environment (the .sub's macros): MRDPM_TARGET (rcbf by default) and MRDPM_VARIANT,
 # the arm whose config is used: config/ctp_only_f13_<target>_<variant>_fold0.json.
 #
-# scripts/pretrain_bran.py (bran_ext_plan.md §2) on the data staged on this box's /home
-# (ctp_only_stage_home.sub with this box as gpu_host), with the fold's split.json from the staged
-# gan_bpm run, as the training jobs read them on the H100. It works in
-# /home/colivares/mrdpm_ctp_only/bran_runs/<job>/ on this box, so a job
+# scripts/pretrain_bran.py (bran_ext_plan.md §2) on the data staged on this box's own disk,
+# <root>/stage (ctp_only_stage_home.sub with this box as gpu_host; <root> is
+# /raid/colivares/mrdpm_ctp_only on 14959, /home/colivares/mrdpm_ctp_only elsewhere), with the
+# fold's split.json from the staged gan_bpm run, as the training jobs read them on the H100.
+# It works in <root>/bran_runs/<job>/ on this box, so a job
 # Condor runs again resumes from its last epoch, and at the end copies everything but the resume
 # file to /radraid2/colivares/mrdpm_ctp_only/bran/<name>/fold_<k>/ under a temporary name, then
 # renames it. It refuses to start if that folder exists: a finished pretraining stays as it is.
@@ -28,7 +29,14 @@ MODE="${2:-debug}"
 JOBID="${3:-job$$}"
 TARGET="${MRDPM_TARGET:-rcbf}"
 VARIANT="${MRDPM_VARIANT:-none}"
-H=/home/colivares/mrdpm_ctp_only
+# This box's own disk for our files (decisions #37): the Quadro box 14959 has no /home/colivares
+# but a local /raid/colivares; the H100 box and the L40S box 35840 use /home/colivares.
+box=$(grep -m1 '^Machine = ' "${_CONDOR_MACHINE_AD:-/dev/null}" 2>/dev/null | cut -d'"' -f2)
+[ -n "$box" ] || box=$(hostname)        # inside docker: colivares-<job>-<machine>
+case "$box" in
+    *REDLRADADM14959*) H=/raid/colivares/mrdpm_ctp_only ;;
+    *) H=/home/colivares/mrdpm_ctp_only ;;
+esac
 STAGE="$H/stage"
 LOCAL="$H/bran_runs/$JOBID"
 CODE="$W/MRDPM-with-RAP_fork"
@@ -51,6 +59,7 @@ case "$FOLD" in [0-4]) ;; *) fail "fold must be 0-4, not '$FOLD'" ;; esac
 CONFIG="$CODE/config/ctp_only_f13_${TARGET}_${VARIANT}_fold0.json"
 
 say "host: $(hostname)   date: $(date -Is)   target $TARGET   variant $VARIANT   fold $FOLD   mode $MODE   job $JOBID"
+say "box $box: data in $STAGE, work in $LOCAL"
 nvidia-smi -L || echo "(nvidia-smi -L failed)"
 [ -d "$CODE" ] || fail "no checkout at $CODE (transfer_input_files)"
 say "MRDPM code: $(git -C "$CODE" rev-parse --short HEAD 2>/dev/null || echo '<git unavailable>')"

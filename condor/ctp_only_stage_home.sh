@@ -1,7 +1,8 @@
 #!/bin/bash
 # Invoked by ctp_only_stage_home.sub, on the box its gpu_host names (the H100 box by default).
-# Copies from the /radraid2 stage to that box's own disk, checks the copy, and writes the
-# target's done-marker last.
+# Copies from the /radraid2 stage to that box's own disk, <root>/stage, checks the copy, and
+# writes the target's done-marker last. <root> is /raid/colivares/mrdpm_ctp_only on the Quadro
+# box 14959 and /home/colivares/mrdpm_ctp_only elsewhere (decisions #37).
 #
 # MRDPM_TARGET (the .sub's `target`) picks what is staged:
 #   tmax (default)  the Tmax files, gan_bpm's code, the Tmax generators in gan_run/; STAGED_OK
@@ -18,7 +19,15 @@ export PYTHONUNBUFFERED=1
 
 TARGET="${MRDPM_TARGET:-tmax}"
 SRC=/radraid2/colivares/mrdpm_ctp_only/stage
-DST=/home/colivares/mrdpm_ctp_only/stage
+# This box's own disk for our files (decisions #37): the Quadro box 14959 has no /home/colivares
+# but a local /raid/colivares; the H100 box and the L40S box 35840 use /home/colivares.
+box=$(grep -m1 '^Machine = ' "${_CONDOR_MACHINE_AD:-/dev/null}" 2>/dev/null | cut -d'"' -f2)
+[ -n "$box" ] || box=$(hostname)        # inside docker: colivares-<job>-<machine>
+case "$box" in
+    *REDLRADADM14959*) H=/raid/colivares/mrdpm_ctp_only ;;
+    *) H=/home/colivares/mrdpm_ctp_only ;;
+esac
+DST="$H/stage"
 STAGER="${_CONDOR_SCRATCH_DIR:-$PWD}/ctp_only_stage_data.py"
 
 fail() { echo "FATAL: $*"; exit 1; }
@@ -32,9 +41,10 @@ case "$TARGET" in
 esac
 
 echo "host: $(hostname)   date: $(date -Is)   target $TARGET"
-[ -d /home/colivares ] || fail "this job doesn't see /home/colivares on $(hostname)"
+echo "box $box: staging into $DST"
+[ -d "$(dirname "$H")" ] || fail "this job doesn't see $(dirname "$H") on $box"
 [ -d "$SRC" ] || fail "this job doesn't see $SRC on $(hostname)"
-df -h /home | tail -1
+df -h "$(dirname "$H")" | tail -1
 rm -f "$MARK"                   # until this run has checked its copy
 mkdir -p "$DST" || fail "cannot create $DST"
 echo "==================================================================="

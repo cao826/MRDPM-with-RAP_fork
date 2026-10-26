@@ -568,6 +568,23 @@ Settled before any ISLES 2018 map exists, so no result shaped it (#15).
   and keep the resume point on `/radraid2`; or 14959's local `/raid` or its workspace.
 - **Status:** adopted (built 2026-10-25); the docker probe of 35840 and its staging pending.
 
+### 37. 2026-10-25 · BRAN pretrains on 35840 or 14959, each staged on its own disk
+
+- **Decision (Carlos):** stage the rCBF data on two boxes: the L40S box REDLRADADM35840 in
+  `/home/colivares/mrdpm_ctp_only/stage`, and the Quadro box REDLRADADM14959 in its local
+  `/raid/colivares/mrdpm_ctp_only/stage` (it has no `/home/colivares`, #36). The staging and
+  pretraining scripts pick the folder from the box they land on (Condor's machine ad, else the
+  hostname): `/raid` on 14959, `/home` elsewhere, so the H100's jobs are unchanged. A
+  pretraining runs on whichever of the two has a free GPU (`box_a`, `box_b`; name one twice to
+  pin it).
+- **Why:** two boxes give the three pretrainings more free GPUs to land on, with no H100 card.
+- **Cost:** a job Condor evicts and reruns on the other box starts its BRAN over: the resume file
+  is on the first box's disk.
+- **Code:** `condor/ctp_only_stage_home.{sub,sh}`, `condor/ctp_only_bran_pretrain.{sub,sh}`, the
+  DAG's `PRE_*` nodes (no host now). Plan: `bran_ext_plan.md` §2.5.
+- **Status:** decided (Carlos); built 2026-10-25. Whether docker jobs see 35840's `/home` and
+  14959's `/raid` is each staging job's first check.
+
 ---
 
 ## Open
@@ -600,7 +617,7 @@ The current setting is in brackets.
   cos(pix, ext) 0.27 / 0.80 / 0.79 / −0.08 / 0.35 for folds 0–4. The core check on the CV
   held-out cases, gan_bpm only: Dice at 0.3 is 0.42, matched 0.48, floor 0.06, volume 0.59 × the
   label's: mostly a place problem. `/radraid2/colivares/mrdpm_ctp_only/{ext_share,cv_core_check}/`].
-- **The BRAN and extreme-loss arms** (#30–#36, branch `bran-ext`, `bran_ext_plan.md`): the box
+- **The BRAN and extreme-loss arms** (#30–#37, branch `bran-ext`, `bran_ext_plan.md`): the box
   checks (`scripts/bran_ext_checks.py`, `scripts/ctp_only_checks.py`), a debug pretraining and
   training of `bran_l1`, then `condor/ctp_only_bran_ext.dag` [built, not run]; the recipe
   choices of #30 and the masked input [Carlos to confirm]; the soft-Dice term [not built].

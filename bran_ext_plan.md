@@ -122,23 +122,25 @@ floating-point buffers the two models share, the same way it averages weights (t
 ### 2.5 Where the pretraining runs: off the H100 box (decisions #35)
 
 The H100s are for the 20 h MRDPM trainings and the tests. BRAN's pretraining runs on another
-box: the L40S box **REDLRADADM35840** (8 × 46 GB), the one GPU box besides the H100's with a
-`/home/colivares` (decisions #36), or another with `gpu_host`. It fits on any of them. The
+box: whichever of the L40S box **REDLRADADM35840** (8 × 46 GB) and the Quadro box
+**REDLRADADM14959** (10 × 48 GB) has a free GPU (decisions #36–#37). It fits on any of them. The
 model is about 30 M weights, against the U-Net's 68.5 M, and my estimate is a few GB at batch 4.
 That's an estimate, not a measurement: the log's `gpu_peak_gib` column gives the real number
 from the first debug run. The L40S is the faster card.
 
 It works as on the H100: the data are copied once from `/radraid2/colivares/mrdpm_ctp_only/stage/`
-to that box's `/home/colivares/mrdpm_ctp_only/stage` (`ctp_only_stage_home.sub` with `gpu_host`,
-rCBF only, about 17 GB). The job works in that box's `/home`, and the finished BRAN goes to
+to each box's own disk (`ctp_only_stage_home.sub` with `gpu_host`, rCBF only, about 17 GB):
+`/home/colivares/mrdpm_ctp_only/stage` on 35840, the local `/raid/colivares/mrdpm_ctp_only/stage`
+on 14959, which has no `/home/colivares`. The staging and pretraining scripts pick the folder
+from the box they land on. The job works on that box's disk, and the finished BRAN goes to
 `/radraid2/colivares/mrdpm_ctp_only/bran/`, where the H100 trainings read it. On a box with no
 Tmax stage, the rCBF staging copies gan_bpm's code itself (the H100's still reuses Tmax's).
 
 **Storage, probed 2026-10-25** (`condor/probe_storage.sub`, `probe_storage_host.sub`): 35839 has
 no `/home/colivares` at all, in docker or out; 35840 has one, writable; 14959 has none, but a
 writable local `/raid/colivares` and a 3.2 TB workspace. Every box sees `/radraid*`. Whether
-docker jobs on 35840 see its `/home` is checked by the staging job first, which fails at once
-if not. The account's
+docker jobs see 35840's `/home` and 14959's `/raid` is checked by each staging job first, which
+fails at once if not. A pretraining Condor evicts and reruns on the other box starts over. The account's
 3-GPU cap is cluster-wide, so this frees H100 cards but adds no GPUs.
 
 ---
@@ -245,7 +247,7 @@ running. The scoring still imports gan_bpm from its first checkout, which stays 
 
 ### 5.2 Order and cost: `condor/ctp_only_bran_ext.dag`
 
-1. `PRE_L1`, `PRE_EXT`, `PRE_LOW`: three pretrainings on the L40S box (§2.5), a few hours
+1. `PRE_L1`, `PRE_EXT`, `PRE_LOW`: three pretrainings on 35840 or 14959 (§2.5), a few hours
    each (to measure).
 2. `CHECK_PRE` (14958, minutes): BRAN alone against gan_bpm's `best.pt` on fold 0's held-out
    cases (`--gan-bpm-only --bran …`).
@@ -306,7 +308,8 @@ Then the data on the pretraining box (once), and a debug pass before the DAG:
 ```bash
 cd condor && mkdir -p log
 condor_submit ctp_only_stage_home.sub -append 'target = rcbf' -append 'gpu_host = REDLRADADM35840'  # no GPU
-condor_submit ctp_only_bran_pretrain.sub -append 'variant = bran_l1'            # L40S, 1 epoch -> bran/debug_rcbf_l1/
+condor_submit ctp_only_stage_home.sub -append 'target = rcbf' -append 'gpu_host = REDLRADADM14959'  # no GPU
+condor_submit ctp_only_bran_pretrain.sub -append 'variant = bran_l1'            # 35840 or 14959, 1 epoch -> bran/debug_rcbf_l1/
 condor_submit ctp_only_train_h100.sub -append 'target = rcbf' -append 'variant = bran_l1'   # H100, uses the debug BRAN
 ```
 
@@ -329,8 +332,8 @@ debug.
 | `scripts/ctp_only_core_check.py` | `--variant`, `--bran`, `--allow-debug-bran`; arm-aware names; every map on the slices they all have; picks among arms and among BRANs |
 | `scripts/bran_ext_checks.py` | new: §6 |
 | `config/ctp_only_f13_rcbf_{bran_l1,bran_ext,bran_ext_diffext,bran_l1_diffext,bran_extlow}_fold0.json` | new: rCBF fold 0's config with only the name, `initial_predictor` and `diffusion_ext` changed |
-| `condor/ctp_only_bran_pretrain.{sub,sh}` | new; runs off the H100 (`gpu_host`, default the L40S REDLRADADM35840) |
-| `condor/ctp_only_stage_home.{sub,sh}` | `gpu_host`; rCBF on a box with no Tmax stage copies gan_bpm's code itself |
+| `condor/ctp_only_bran_pretrain.{sub,sh}` | new; runs off the H100, on 35840 or 14959 (`box_a`, `box_b`), files on that box's own disk |
+| `condor/ctp_only_stage_home.{sub,sh}` | `gpu_host`; the folder by box (14959: local `/raid`); rCBF on a box with no Tmax stage copies gan_bpm's code itself |
 | `condor/ctp_only_train_h100.{sub,sh}` | `variant` macro; a BRAN arm's predictor is copied from `/radraid2` to `/home` |
 | `condor/ctp_only_test_h100.{sub,sh}` | arm-aware run names; `run` may be a name without its time (the DAG's) |
 | `condor/ctp_only_bran_ext.dag` | new: §5.2 |

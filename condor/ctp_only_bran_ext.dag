@@ -3,7 +3,7 @@
 # diffusion loss, or in both. CV fold 0 is a development set (ctp_only_decisions.md #29);
 # ISLES 2018 is not touched.
 #
-#   1. Pretrain the three BRANs (a few hours each, on an L40S box, not the H100):
+#   1. Pretrain the three BRANs (a few hours each, on the L40S 35840 or the Quadro 14959):
 #                                                             PRE_L1  PRE_EXT  PRE_LOW
 #   2. Score them alone on fold 0's held-out cases (14958):   CHECK_PRE
 #   3. Train MRDPM with them (about 20 h each, H100):          TRAIN_L1  TRAIN_EXT  TRAIN_EXT_DIFF  TRAIN_L1_DIFF
@@ -13,13 +13,14 @@
 #   5. Score everything (14958):                              CHECK_ALL
 #
 # First, once each: the checks (bran_ext_plan.md §6: scripts/bran_ext_checks.py and
-# scripts/ctp_only_checks.py); the rCBF data on the pretraining box's /home (about 17 GB; the
-# H100 box has its copy already); then a debug pretraining there and a debug training of one arm:
+# scripts/ctp_only_checks.py); the rCBF data on both pretraining boxes (about 17 GB each; the H100
+# box has its copy already); then a debug pretraining and a debug training of one arm:
 #   condor_submit ctp_only_stage_home.sub -append 'target = rcbf' -append 'gpu_host = REDLRADADM35840'
+#   condor_submit ctp_only_stage_home.sub -append 'target = rcbf' -append 'gpu_host = REDLRADADM14959'
 #   condor_submit ctp_only_bran_pretrain.sub -append 'variant = bran_l1'
 #   condor_submit ctp_only_train_h100.sub -append 'target = rcbf' -append 'variant = bran_l1'
-# 35840 is the L40S box with a /home/colivares (35839 has none; condor/probe_storage.sub). To use
-# another box with one, stage it there and change gpu_host in the three VARS PRE_* lines below.
+# The PRE_* nodes run on whichever of REDLRADADM35840 (L40S, /home) and REDLRADADM14959 (Quadro,
+# local /raid) has a free GPU (ctp_only_bran_pretrain.sub; decisions #37).
 #
 #   cd /raid/colivares/github_repos/MRDPM-with-RAP_fork && git pull
 #   condor_q -run          # this account may hold 3 GPUs at once; going over gets jobs booted
@@ -42,11 +43,11 @@
 # after a finished PRE_*, delete that node's lines before a resubmission (or use the rescue file).
 
 JOB      PRE_L1          ctp_only_bran_pretrain.sub
-VARS     PRE_L1          variant="bran_l1" fold="0" mode="full" target="rcbf" gpu_host="REDLRADADM35840"
+VARS     PRE_L1          variant="bran_l1" fold="0" mode="full" target="rcbf"
 JOB      PRE_EXT         ctp_only_bran_pretrain.sub
-VARS     PRE_EXT         variant="bran_ext" fold="0" mode="full" target="rcbf" gpu_host="REDLRADADM35840"
+VARS     PRE_EXT         variant="bran_ext" fold="0" mode="full" target="rcbf"
 JOB      PRE_LOW         ctp_only_bran_pretrain.sub
-VARS     PRE_LOW         variant="bran_extlow" fold="0" mode="full" target="rcbf" gpu_host="REDLRADADM35840"
+VARS     PRE_LOW         variant="bran_extlow" fold="0" mode="full" target="rcbf"
 
 JOB      CHECK_PRE       ctp_only_core_check.sub
 VARS     CHECK_PRE       args="--gan-bpm-only --fold 0 --bran /radraid2/colivares/mrdpm_ctp_only/bran/rcbf_l1 --bran /radraid2/colivares/mrdpm_ctp_only/bran/rcbf_ext --bran /radraid2/colivares/mrdpm_ctp_only/bran/rcbf_extlow"
