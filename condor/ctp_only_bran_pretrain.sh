@@ -64,6 +64,14 @@ nvidia-smi -L || echo "(nvidia-smi -L failed)"
 [ -d "$CODE" ] || fail "no checkout at $CODE (transfer_input_files)"
 say "MRDPM code: $(git -C "$CODE" rev-parse --short HEAD 2>/dev/null || echo '<git unavailable>')"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | sed 's/^/GPU: /' | tee -a "$W/job_summary.txt"
+# Never on the CPU (decisions #38): 14959's first debug job got a GPU slot but no GPU in its
+# container, and pretrain_bran.py fell back to the CPU without a word.
+n_gpus=$(python -c "import torch; print(torch.cuda.device_count())" 2>/dev/null || echo 0)
+if [ "${n_gpus:-0}" -lt 1 ]; then
+    say "no GPU in this container: CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}  NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-<unset>}  /dev/nvidia*: $(ls /dev/nvidia* 2>/dev/null | tr '\n' ' ')"
+    say "slot: $(grep -E '^(AssignedGPUs|GPUs|TotalGPUs) ' "${_CONDOR_MACHINE_AD:-/dev/null}" 2>/dev/null | tr '\n' ' ')"
+    fail "torch sees no GPU on $box: refusing to pretrain on the CPU (condor/probe_gpu.sub tests a box)"
+fi
 [ -f "$CONFIG" ] || fail "no $CONFIG"
 [ -f "$STAGED" ] || fail "no $STAGED on $(hostname): stage it there first (ctp_only_stage_home.sub, target $TARGET, gpu_host this box)"
 [ -f "$GAN_RUN/fold_$FOLD/split.json" ] || fail "fold_$FOLD of $TARGET isn't staged"
@@ -97,7 +105,7 @@ say "BRAN: $(basename "$(dirname "$DST")") fold $FOLD -> $DST"
 echo "==================================================================="
 echo "2. pretrain (scripts/pretrain_bran.py's output: pretrain.out, copied next to the results)"
 cd "$CODE" || fail "cd $CODE"
-python scripts/pretrain_bran.py -c "$W/job_config.json" --out "$LOCAL" $DEBUG --workers 8 > "$W/pretrain.out" 2>&1 &
+python scripts/pretrain_bran.py -c "$W/job_config.json" --out "$LOCAL" $DEBUG --device cuda --workers 8 > "$W/pretrain.out" 2>&1 &
 PID=$!
 while kill -0 "$PID" 2>/dev/null; do
     for _ in $(seq 60); do

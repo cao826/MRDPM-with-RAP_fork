@@ -1,0 +1,27 @@
+# Does a docker job that asks for a GPU get one? One job per box, in our image, a few seconds each
+# (it holds a GPU that long: count it in the account's 3). Found 2026-10-25 (decisions #38): the
+# first debug pretraining on REDLRADADM14959 got a GPU slot but no GPU in its container, and ran on
+# the CPU. 14958's docker jobs do get theirs (the core check), so it is the comparison.
+#
+#   cd condor && mkdir -p log && condor_submit probe_gpu.sub
+#   grep -h VERDICT log/probe_gpu.*.out        # paste the .out of any box that sees 0
+universe                = docker
+docker_image            = registry.cvib.ucla.edu/colivares:mrdpm-env-v1
+
+executable              = probe_gpu.sh
+arguments               = $(host)
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT
+
+requirements            = (Machine == "$(host).ad.medctr.ucla.edu")
+
+request_gpus            = 1
+request_cpus            = 1
+request_memory          = 2G
+request_disk            = 1G
+
+output                  = log/probe_gpu.$(host).$(cluster).out
+error                   = log/probe_gpu.$(host).$(cluster).err
+log                     = log/probe_gpu.$(cluster).log
+
+queue host in (REDLRADADM14959, REDLRADADM35840, REDLRADADM14958)

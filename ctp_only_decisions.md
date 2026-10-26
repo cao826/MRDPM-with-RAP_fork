@@ -585,6 +585,20 @@ Settled before any ISLES 2018 map exists, so no result shaped it (#15).
 - **Status:** decided (Carlos); built 2026-10-25. Whether docker jobs see 35840's `/home` and
   14959's `/raid` is each staging job's first check.
 
+### 38. 2026-10-25 · A pretraining never runs on the CPU; 14959 on hold
+
+- **What happened:** the first debug pretraining (job 1822820.0, `bran_l1`) landed on
+  REDLRADADM14959 with a GPU slot, but its container had no GPU (`nvidia-smi -L` failed), and
+  `pretrain_bran.py`'s `--device auto` fell back to the CPU without a word. A full run would have
+  taken days instead of failing. Everything else worked: the staged data on 14959's `/raid`, the
+  4 held-out maps, the copy to `/radraid2/colivares/mrdpm_ctp_only/bran/debug_rcbf_l1/fold_0`.
+- **Decision:** the pretraining job checks that torch sees a GPU and fails at once if not,
+  printing what Condor assigned and what the container got; it passes `--device cuda`, which
+  `pretrain_bran.py` refuses without a GPU. `condor/probe_gpu.sub` asks each box (14959, 35840,
+  and 14958 for comparison) whether a GPU reaches a docker job. Until 14959 passes, the DAG pins
+  its `PRE_*` nodes to 35840.
+- **Status:** adopted (built 2026-10-25); the GPU probe not run yet.
+
 ---
 
 ## Open
@@ -617,7 +631,7 @@ The current setting is in brackets.
   cos(pix, ext) 0.27 / 0.80 / 0.79 / −0.08 / 0.35 for folds 0–4. The core check on the CV
   held-out cases, gan_bpm only: Dice at 0.3 is 0.42, matched 0.48, floor 0.06, volume 0.59 × the
   label's: mostly a place problem. `/radraid2/colivares/mrdpm_ctp_only/{ext_share,cv_core_check}/`].
-- **The BRAN and extreme-loss arms** (#30–#37, branch `bran-ext`, `bran_ext_plan.md`): the box
+- **The BRAN and extreme-loss arms** (#30–#38, branch `bran-ext`, `bran_ext_plan.md`): the box
   checks (`scripts/bran_ext_checks.py`, `scripts/ctp_only_checks.py`), a debug pretraining and
   training of `bran_l1`, then `condor/ctp_only_bran_ext.dag` [built, not run]; the recipe
   choices of #30 and the masked input [Carlos to confirm]; the soft-Dice term [not built].

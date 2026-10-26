@@ -140,7 +140,12 @@ Tmax stage, the rCBF staging copies gan_bpm's code itself (the H100's still reus
 no `/home/colivares` at all, in docker or out; 35840 has one, writable; 14959 has none, but a
 writable local `/raid/colivares` and a 3.2 TB workspace. Every box sees `/radraid*`. Whether
 docker jobs see 35840's `/home` and 14959's `/raid` is checked by each staging job first, which
-fails at once if not. A pretraining Condor evicts and reruns on the other box starts over. The account's
+fails at once if not. A pretraining Condor evicts and reruns on the other box starts over.
+
+**14959's GPU, 2026-10-25 (decisions #38):** the first debug pretraining landed on 14959, got a
+GPU slot, saw no GPU in its container, and ran on the CPU. The job now refuses to run without a
+GPU, `condor/probe_gpu.sub` tests each box, and the DAG pins its pretrainings to 35840 until
+14959 passes. The account's
 3-GPU cap is cluster-wide, so this frees H100 cards but adds no GPUs.
 
 ---

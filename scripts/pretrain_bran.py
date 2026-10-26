@@ -167,6 +167,8 @@ def main(argv=None):
     args = p.parse_args(argv)
     device = torch.device("cuda" if args.device == "auto" and torch.cuda.is_available()
                           else ("cpu" if args.device == "auto" else args.device))
+    if device.type == "cuda" and not torch.cuda.is_available():
+        sys.exit("--device cuda, but torch sees no GPU")
     torch.backends.cudnn.benchmark = True
 
     from data.dataset import MCTPDataset_mask                                       # noqa: PLC0415
