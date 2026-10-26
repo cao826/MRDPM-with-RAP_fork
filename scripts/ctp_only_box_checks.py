@@ -42,11 +42,13 @@ CONFIG = REPO / "config/ctp_only_f13_tmax_fold0.json"
 PLAN_SHA256 = {"ctp_only_f13_tmax_fold0": "2428e88482ce0994229a086ac4bb4a56b7b37ada5494156ae3e2ea0eba3a4731",
                "ctp_only_f13_rcbf_fold0": "bb180198b014a459f21353ac72f2bc741af7ab8fbf329aaef6bb882486505c41"}
 
-RESULTS = []
+RESULTS = []                                    # (name, ok), in order
 
 
 def check(name, ok, detail=""):
-    RESULTS.append(bool(ok))
+    """One line per check, as scripts/ctp_only_checks.py prints them: FAIL always means
+    something is wrong."""
+    RESULTS.append((name.strip(), bool(ok)))
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"   [{detail}]" if detail else ""), flush=True)
 
 
@@ -278,12 +280,20 @@ def main():
     else:
         gpu_part(args, cfg, ds_args, P, ckpt, summary)
 
-    n_fail = RESULTS.count(False)
-    summary["checks"] = {"passed": len(RESULTS) - n_fail, "total": len(RESULTS)}
+    failed = [name for name, ok in RESULTS if not ok]
+    summary["checks"] = {"passed": len(RESULTS) - len(failed), "total": len(RESULTS), "failed": failed}
     out = args.out / f"summary_{args.part}.json"
     out.write_text(json.dumps(summary, indent=2, default=str) + "\n")
-    print(f"\n{len(RESULTS) - n_fail}/{len(RESULTS)} checks passed ({args.part}); wrote {out}")
-    sys.exit(1 if n_fail else 0)
+    print(f"\nwrote {out}")
+    print("=" * 72)
+    if failed:
+        print(f"RESULT: {len(failed)} OF {len(RESULTS)} box checks ({args.part}) FAILED")
+        for name in failed:
+            print(f"  FAIL  {name}")
+    else:
+        print(f"RESULT: ALL {len(RESULTS)} box checks ({args.part}) PASSED")
+    print("=" * 72)
+    sys.exit(1 if failed else 0)
 
 
 if __name__ == "__main__":

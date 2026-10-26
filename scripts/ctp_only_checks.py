@@ -44,12 +44,35 @@ H = 256                             # gan_bpm's generator needs H, W >= 256
 MARKERS = {"isles24": -30.0, "ucla_evt": -1.0, "ucla_neg": -1.0}    # each dataset's no-data value
 RCBF_MARKERS = {"isles24": None, "ucla_evt": -1.0, "ucla_neg": -1.0}  # ISLES'24 rCBF has none
 
-RESULTS = []
+RESULTS = []                                    # (name, ok), in order
 
 
 def check(name, ok, detail=""):
-    RESULTS.append(bool(ok))
-    print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"   [{detail}]" if detail else ""), flush=True)
+    """One line per check. PASS means the code did what the check wanted, including refusing a
+    bad input; FAIL always means something is wrong. A negative control (a check made to fail
+    on purpose, to show the check above it can) says which way it went."""
+    RESULTS.append((name.strip(), bool(ok)))
+    note = ""
+    if "negative control" in name:
+        note = ("   -> expected: built to fail the check above it, and it did" if ok else
+                "   -> NOT as expected: the check above it cannot fail, so it proves nothing")
+    print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"   [{detail}]" if detail else "") + note, flush=True)
+
+
+def verdict(results=None, what="checks"):
+    """The last thing a run prints: one RESULT line, then only the failures. Returns the exit
+    status (0 when everything passed)."""
+    results = RESULTS if results is None else results
+    failed = [name for name, ok in results if not ok]
+    print("\n" + "=" * 72)
+    if failed:
+        print(f"RESULT: {len(failed)} OF {len(results)} {what} FAILED")
+        for name in failed:
+            print(f"  FAIL  {name}")
+    else:
+        print(f"RESULT: ALL {len(results)} {what} PASSED")
+    print("=" * 72, flush=True)
+    return 1 if failed else 0
 
 
 def raises(fn, exc=Exception):
@@ -1029,11 +1052,9 @@ def main():
     check_run_py_all(cfg_all["tmax"], root, args.gan_bpm, ckpts["all_tmax"], work)
     check_run_py_all(cfg_all["rcbf"], root, args.gan_bpm, ckpts["all_rcbf"], work)
 
-    n_fail = RESULTS.count(False)
-    print(f"\n{len(RESULTS) - n_fail}/{len(RESULTS)} checks passed")
     if tmp is not None:
         tmp.cleanup()
-    sys.exit(1 if n_fail else 0)
+    sys.exit(verdict(what="ctp_only checks"))
 
 
 if __name__ == "__main__":

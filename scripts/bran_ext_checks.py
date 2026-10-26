@@ -569,11 +569,9 @@ def main():
     check_names()
     check_jobs(work, ckpt)
 
-    n_fail = C.RESULTS.count(False)
-    print(f"\n{len(C.RESULTS) - n_fail}/{len(C.RESULTS)} checks passed")
     if tmp is not None:
         tmp.cleanup()
-    sys.exit(1 if n_fail else 0)
+    sys.exit(C.verdict(what="bran_ext checks"))
 
 
 if __name__ == "__main__":
