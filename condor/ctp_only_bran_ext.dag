@@ -19,9 +19,9 @@
 #   condor_submit ctp_only_stage_home.sub -append 'target = rcbf' -append 'gpu_host = REDLRADADM14959'
 #   condor_submit ctp_only_bran_pretrain.sub -append 'variant = bran_l1'
 #   condor_submit ctp_only_train_h100.sub -append 'target = rcbf' -append 'variant = bran_l1'
-# The PRE_* nodes are pinned to REDLRADADM35840 (L40S, /home): 14959's docker jobs got no GPU in
-# the first debug (decisions #38). Once condor/probe_gpu.sub shows 14959 passing one, delete the
-# box_a/box_b pairs below and the nodes run on whichever of the two has a free GPU (#37).
+# The PRE_* nodes run on REDLRADADM35840 (L40S, /home), ctp_only_bran_pretrain.sub's default:
+# 14959's docker jobs get no GPU (condor/probe_gpu.sub, decisions #38). Once it passes that probe,
+# add box_b="REDLRADADM14959" to the PRE_* VARS lines and they run on whichever box is free (#37).
 #
 #   cd /raid/colivares/github_repos/MRDPM-with-RAP_fork && git pull
 #   condor_q -run          # this account may hold 3 GPUs at once; going over gets jobs booted
@@ -44,11 +44,11 @@
 # after a finished PRE_*, delete that node's lines before a resubmission (or use the rescue file).
 
 JOB      PRE_L1          ctp_only_bran_pretrain.sub
-VARS     PRE_L1          variant="bran_l1" fold="0" mode="full" target="rcbf" box_a="REDLRADADM35840" box_b="REDLRADADM35840"
+VARS     PRE_L1          variant="bran_l1" fold="0" mode="full" target="rcbf"
 JOB      PRE_EXT         ctp_only_bran_pretrain.sub
-VARS     PRE_EXT         variant="bran_ext" fold="0" mode="full" target="rcbf" box_a="REDLRADADM35840" box_b="REDLRADADM35840"
+VARS     PRE_EXT         variant="bran_ext" fold="0" mode="full" target="rcbf"
 JOB      PRE_LOW         ctp_only_bran_pretrain.sub
-VARS     PRE_LOW         variant="bran_extlow" fold="0" mode="full" target="rcbf" box_a="REDLRADADM35840" box_b="REDLRADADM35840"
+VARS     PRE_LOW         variant="bran_extlow" fold="0" mode="full" target="rcbf"
 
 JOB      CHECK_PRE       ctp_only_core_check.sub
 VARS     CHECK_PRE       args="--gan-bpm-only --fold 0 --bran /radraid2/colivares/mrdpm_ctp_only/bran/rcbf_l1 --bran /radraid2/colivares/mrdpm_ctp_only/bran/rcbf_ext --bran /radraid2/colivares/mrdpm_ctp_only/bran/rcbf_extlow"

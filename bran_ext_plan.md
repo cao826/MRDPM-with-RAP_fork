@@ -144,8 +144,9 @@ fails at once if not. A pretraining Condor evicts and reruns on the other box st
 
 **14959's GPU, 2026-10-25 (decisions #38):** the first debug pretraining landed on 14959, got a
 GPU slot, saw no GPU in its container, and ran on the CPU. The job now refuses to run without a
-GPU, `condor/probe_gpu.sub` tests each box, and the DAG pins its pretrainings to 35840 until
-14959 passes. The account's
+GPU, and `condor/probe_gpu.sub` tests each box. **Its result: 14958 and 35840 pass a GPU into
+docker jobs, 14959 doesn't** (an admin fix). The pretraining job's default is 35840 alone; 14959
+stays staged for when it passes. The account's
 3-GPU cap is cluster-wide, so this frees H100 cards but adds no GPUs.
 
 ---

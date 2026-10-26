@@ -597,7 +597,9 @@ Settled before any ISLES 2018 map exists, so no result shaped it (#15).
   `pretrain_bran.py` refuses without a GPU. `condor/probe_gpu.sub` asks each box (14959, 35840,
   and 14958 for comparison) whether a GPU reaches a docker job. Until 14959 passes, the DAG pins
   its `PRE_*` nodes to 35840.
-- **Status:** adopted (built 2026-10-25); the GPU probe not run yet.
+- **Status:** adopted (built 2026-10-25). **The GPU probe, 2026-10-25: torch sees 1 GPU in docker
+  on 14958 and 35840, 0 on 14959.** 14959's Condor doesn't hand GPUs to docker jobs (an admin
+  fix). The pretraining job's default is now 35840 alone, and the DAG names no box.
 
 ---
 

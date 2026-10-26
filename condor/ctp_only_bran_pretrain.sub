@@ -6,19 +6,19 @@
 # where ctp_only_train_h100.sub's BRAN runs read them. The code is this checkout on 14958: git
 # pull before submitting.
 #
-# WHERE (bran_ext_plan.md §2.5, decisions #36-#37): off the H100 box, on whichever of two boxes has
-# a free GPU: the L40S box REDLRADADM35840 (46 GB cards; files in /home/colivares/mrdpm_ctp_only) or
-# the Quadro box REDLRADADM14959 (48 GB; files in its local /raid/colivares/mrdpm_ctp_only). The job
-# picks the folder from the box it lands on. Stage the rCBF data on both first, once each (no GPU):
+# WHERE (bran_ext_plan.md §2.5, decisions #36-#38): off the H100 box, on the L40S box
+# REDLRADADM35840 (46 GB cards; files in /home/colivares/mrdpm_ctp_only). The Quadro box
+# REDLRADADM14959 is staged too (files in its local /raid/colivares/mrdpm_ctp_only), but its docker
+# jobs get no GPU (condor/probe_gpu.sub, 2026-10-25), so it is not a default. Once it passes that
+# probe, -append 'box_b = REDLRADADM14959' lets a job run on either. The job picks the folder from
+# the box it lands on. The rCBF data, once per box (no GPU):
 #   condor_submit ctp_only_stage_home.sub -append 'target = rcbf' -append 'gpu_host = REDLRADADM35840'
 #   condor_submit ctp_only_stage_home.sub -append 'target = rcbf' -append 'gpu_host = REDLRADADM14959'
-# To pin one box, name it twice: -append 'box_a = REDLRADADM14959' -append 'box_b = REDLRADADM14959'.
 #
 #   cd condor && mkdir -p log
 #   condor_submit ctp_only_bran_pretrain.sub -append 'variant = bran_l1'                     # debug
 #   condor_submit ctp_only_bran_pretrain.sub -append 'variant = bran_l1' -append 'mode = full'
 #   condor_submit ctp_only_bran_pretrain.sub -append 'variant = bran_ext' -append 'mode = full' -append 'fold = 1'
-#   condor_submit ctp_only_bran_pretrain.sub -append 'variant = bran_l1' -append 'box_a = REDLRADADM14959' -append 'box_b = REDLRADADM14959'
 #
 #   tail -f log/ctp_only_bran_pretrain.<cluster>.0.out
 #
@@ -40,7 +40,7 @@ when_to_transfer_output = ON_EXIT
 transfer_output_files   = job_summary.txt
 transfer_output_remaps  = "job_summary.txt = log/ctp_only_bran_pretrain.$(cluster).$(process).summary"
 
-requirements            = (Machine == "$(box_a:REDLRADADM35840).ad.medctr.ucla.edu") || (Machine == "$(box_b:REDLRADADM14959).ad.medctr.ucla.edu")
+requirements            = (Machine == "$(box_a:REDLRADADM35840).ad.medctr.ucla.edu") || (Machine == "$(box_b:REDLRADADM35840).ad.medctr.ucla.edu")
 # DataLoader workers hand batches over through /dev/shm.
 +DevShmSize             = 8589934592
 
