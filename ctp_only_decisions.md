@@ -601,6 +601,21 @@ Settled before any ISLES 2018 map exists, so no result shaped it (#15).
   on 14958 and 35840, 0 on 14959.** 14959's Condor doesn't hand GPUs to docker jobs (an admin
   fix). The pretraining job's default is now 35840 alone, and the DAG names no box.
 
+### 39. 2026-10-26 · gan_bpm scores its own runs; `--run-dir` stays here for one comparison
+
+- **What changed:** gan_bpm's λ_ext pilots and fine-tunes were to be scored by
+  `scripts/ctp_only_core_check.py --gan-bpm-only --run-dir` (#29). Carlos asked why a gan_bpm
+  experiment goes through this repo, and the scoring moved to gan_bpm's branch
+  `ext_gan_25Oct2026` as `scripts/core_check.py` (gan_bpm's D-100).
+- **Why:** this script reads gan_bpm through the first checkout (`new_eval_14Oct2026`), whose code
+  refuses step 2's relativistic arm, and its pick applies gan_bpm's §1.4 alone: it would have
+  judged step 2's fine-tunes by step 1's rule.
+- **What stays:** `--run-dir` here, unchanged, for one job: gan_bpm's scorer must reproduce it on
+  the three step-1 pilots scan for scan (`--compare-with`) before it judges any fine-tune. After
+  that, nothing in gan_bpm's experiments is scored here; MRDPM's own core check (#29) and
+  `--bran` are unaffected.
+- **Status:** adopted.
+
 ---
 
 ## Open

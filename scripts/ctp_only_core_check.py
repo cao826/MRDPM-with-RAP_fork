@@ -37,6 +37,9 @@ the core is. --recipe lsgan --recipe wgan_gp adds those fold models.
 --run-dir scores other gan_bpm runs too, at --run-checkpoint (last.pt): gan_bpm's λ_ext
 pilots (its ext_gan_plan.md step 1). With two or more, the first is the control, every other
 is compared with it per scan, and the pre-declared pick rule of that plan's §1.4 is applied.
+Since 2026-10-26 gan_bpm scores its own runs (its scripts/core_check.py, D-100; decisions #39):
+this path stays only for that script's scan-for-scan comparison, and must not judge step 2's
+fine-tunes (it knows §1.4's rule alone).
 
     python scripts/ctp_only_core_check.py [--target rcbf] [--fold 0 --fold 1] [--device cuda]
     python scripts/ctp_only_core_check.py --gan-bpm-only --recipe lsgan --recipe wgan_gp
