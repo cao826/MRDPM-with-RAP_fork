@@ -43,11 +43,11 @@
 # A pretraining refuses to start if its BRAN exists on /radraid2 already, and so fails its node:
 # after a finished PRE_*, delete that node's lines before a resubmission (or use the rescue file).
 
-JOB      PRE_L1          ctp_only_bran_pretrain.sub
+JOB      PRE_L1          ctp_only_bran_pretrain.sub DONE
 VARS     PRE_L1          variant="bran_l1" fold="0" mode="full" target="rcbf"
-JOB      PRE_EXT         ctp_only_bran_pretrain.sub
+JOB      PRE_EXT         ctp_only_bran_pretrain.sub DONE
 VARS     PRE_EXT         variant="bran_ext" fold="0" mode="full" target="rcbf"
-JOB      PRE_LOW         ctp_only_bran_pretrain.sub
+JOB      PRE_LOW         ctp_only_bran_pretrain.sub DONE
 VARS     PRE_LOW         variant="bran_extlow" fold="0" mode="full" target="rcbf"
 
 JOB      CHECK_PRE       ctp_only_core_check.sub
